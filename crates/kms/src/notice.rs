@@ -58,6 +58,32 @@ pub static TEST: Sources =
 /// the clock of this PC is set to.
 pub type Minutes = i64;
 
+/// A moment in Korean time, in seconds since 1970: the same clock as [`Minutes`], to the
+/// second. The hours Nexon states are whole minutes; what is held against them is this.
+pub type Seconds = i64;
+
+/// How far Korean time is ahead of the time servers state theirs in.
+pub const KOREA_AHEAD: Seconds = 9 * 3600;
+
+/// The moment a server states in the `Date` header of its answer, in Korean time:
+/// `Thu, 26 Nov 2026 09:04:04 GMT`. Nothing for anything written another way.
+pub fn stated_time(date: &str) -> Option<Seconds> {
+    let mut parts = date.trim().strip_suffix("GMT")?.split_whitespace().skip(1);
+    let (day, month, year, time) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let month = months.iter().position(|name| *name == month)? as u32 + 1;
+    let (day, year) = (day.parse::<u32>().ok().filter(|day| (1..=31).contains(day))?, year.parse::<i64>().ok()?);
+    let mut clock = time.split(':').map(|figure| figure.parse::<i64>().ok().filter(|_| figure.len() == 2));
+    let (hour, minute, second) = (clock.next()??, clock.next()??, clock.next()??);
+    if clock.next().is_some() || hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    Some(days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second + KOREA_AHEAD)
+}
+
 /// Now, in Korean time.
 pub fn now() -> Minutes {
     let utc = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| since.as_secs() as i64);
@@ -68,6 +94,17 @@ pub fn now() -> Minutes {
 pub fn clock(at: Minutes) -> String {
     let of_day = at.rem_euclid(1440);
     format!("{:02}:{:02}", of_day / 60, of_day % 60)
+}
+
+/// A moment as the screen shows it at `now`: the time of day while it is the same day, and
+/// the date before it otherwise, written the way Nexon's board writes a date: `10:00`,
+/// `2026.11.27 02:00`.
+pub fn shown(at: Minutes, now: Minutes) -> String {
+    if at.div_euclid(1440) == now.div_euclid(1440) {
+        return clock(at);
+    }
+    let (year, month, day) = civil_from_days(at.div_euclid(1440));
+    format!("{year}.{month:02}.{day:02} {}", clock(at))
 }
 
 /// A maintenance the inspection service lists.
@@ -97,8 +134,12 @@ pub fn read_inspection(xml: &str) -> Vec<Planned> {
         let record = &rest[..end];
         rest = &rest[end..];
         let times = field(record, "startDateTime").zip(field(record, "endDateTime"));
+        // One that ends before it begins, or lasts longer than any maintenance does, is not a
+        // maintenance but a mistake in the answer, and would otherwise read as "closed" for
+        // as long as it says.
         if let Some((begins, ends)) = times.and_then(|(begins, ends)| stamp(&begins).zip(stamp(&ends)))
             && ends > begins
+            && ends - begins <= LONGEST
         {
             planned.push(Planned { begins, ends, text: field(record, "strObstacleContents").unwrap_or_default() });
         }
@@ -106,20 +147,33 @@ pub fn read_inspection(xml: &str) -> Vec<Planned> {
     planned
 }
 
-/// Korean time of a stamp such as `2026-11-19T04:00:00+09:00`.
+/// The longest a maintenance is taken to last. The long ones run for most of a day.
+const LONGEST: Minutes = 7 * 1440;
+
+/// Korean time of a stamp such as `2026-11-19T04:00:00+09:00`. A stamp whose figures are not
+/// those of a date and a time of day is none: what a server sends is not to be trusted to be
+/// one, and figures without bound would overflow the reckoning.
 fn stamp(text: &str) -> Option<Minutes> {
     let (date, time) = text.trim().split_once('T')?;
     let mut parts = date.split('-');
     let year: i64 = parts.next()?.parse().ok()?;
     let (month, day): (u32, u32) = (parts.next()?.parse().ok()?, parts.next()?.parse().ok()?);
     let (hour, minute): (i64, i64) = (time.get(0..2)?.parse().ok()?, time.get(3..5)?.parse().ok()?);
+    let a_date = (2000..=2100).contains(&year) && (1..=12).contains(&month) && (1..=31).contains(&day);
+    if !a_date || !(0..=24).contains(&hour) || !(0..60).contains(&minute) {
+        return None;
+    }
     // The distance from UTC, where the stamp states one. The service states Korean time.
     let zone = time.get(5..).and_then(|rest| rest.find(['+', '-', 'Z']).map(|at| &rest[at..]));
     let ahead = match zone {
         Some("Z") => 0,
         Some(zone) => {
             let (hours, minutes) = zone[1..].split_once(':')?;
-            let distance = hours.parse::<i64>().ok()? * 60 + minutes.parse::<i64>().ok()?;
+            let (hours, minutes): (i64, i64) = (hours.parse().ok()?, minutes.parse().ok()?);
+            if !(0..=14).contains(&hours) || !(0..60).contains(&minutes) {
+                return None;
+            }
+            let distance = hours * 60 + minutes;
             if zone.starts_with('-') { -distance } else { distance }
         }
         None => 9 * 60,
@@ -138,23 +192,31 @@ pub struct Notice {
 /// live one links its notices as `/News/Notice/Inspection/150506`, the test world's as
 /// `/testworld/news/inspect/195`.
 pub fn read_board(html: &str) -> Vec<Notice> {
-    const LINKS: [&str; 2] = ["href=\"/news/notice/inspection/", "href=\"/testworld/news/inspect/"];
+    const LINK: &str = "href=\"/";
+    const BOARDS: [&str; 2] = ["news/notice/inspection/", "testworld/news/inspect/"];
+    /// A link to a notice, with its title, is a few hundred bytes. Looking no further than
+    /// this for its end keeps a page of any size and any shape from taking long.
+    const LONGEST_LINK: usize = 4096;
     // Links to notices also occur in the page's menus; the list itself comes after this.
-    let list = html.find("class=\"news_board\"").map_or("", |at| &html[at..]);
+    let list = html.find(BOARD).map_or("", |at| &html[at..]);
     // The same text with its Latin letters in lower case, so that a byte is at the same place
     // in both: the two boards do not agree on how to write their own addresses.
     let lower = list.to_ascii_lowercase();
     let mut notices = Vec::new();
     let mut from = 0;
-    while let Some((at, link)) =
-        LINKS.iter().filter_map(|link| Some((from + lower[from..].find(link)?, link))).min_by_key(|(at, _)| *at)
-    {
-        from = at + link.len();
+    while let Some(found) = lower[from..].find(LINK) {
+        from += found + LINK.len();
+        let Some(board) = BOARDS.iter().find(|board| lower[from..].starts_with(**board)) else { continue };
+        from += board.len();
         let rest = &list[from..];
         let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
         let Ok(id) = rest[..digits].parse() else { continue };
+        let mut near = rest.len().min(LONGEST_LINK);
+        while !rest.is_char_boundary(near) {
+            near -= 1;
+        }
         // The title is the text of the first <span> inside the link.
-        let link = &rest[..rest.find("</a>").unwrap_or(rest.len())];
+        let link = &rest[..rest[..near].find("</a>").unwrap_or(near)];
         let title = link.find("<span>").and_then(|open| {
             let text = &link[open + "<span>".len()..];
             Some(plain(&text[..text.find("</span>")?]))
@@ -164,6 +226,67 @@ pub fn read_board(html: &str) -> Vec<Notice> {
         }
     }
     notices
+}
+
+/// What marks the list of notices on a board's page.
+const BOARD: &str = "class=\"news_board\"";
+
+/// Whether a page is a notice board at all. A page that is not (a login page of a network, an
+/// error page, nothing) holds no notices, and that must not be taken for a board that
+/// announces no maintenance: it says nothing either way.
+pub fn is_board(html: &str) -> bool {
+    html.contains(BOARD)
+}
+
+/// What the game's site answered when it was asked for a client's board.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Site {
+    /// The board.
+    Board,
+    /// The panel the test world shows between two of its operating periods.
+    OutOfSeason,
+    /// The site answered, and with something that is not the board: what it shows in
+    /// place of its pages while it is closed for a maintenance.
+    Blocked,
+    /// No answer that says anything of the site: it turned the question away, or what came
+    /// was not its own.
+    Unreachable,
+}
+
+/// What an answer with `status` and the text `page` is taken for.
+///
+/// What the site shows while it is closed has not been seen yet, so that is told by what
+/// it is not, and narrowly. It is the site's own answer, in full: a page, answered with
+/// 200 from wherever the question ended up, or with one of the statuses a server gives
+/// that is closed or broken (500, 502, 503, 504). It is not the board and not the panel
+/// between two operating periods. And it is not a page of the network in front of the
+/// site, which answers in its place when it wants a visitor checked or cannot reach the
+/// site. Everything else says nothing: a question that was turned away (any 4xx), any
+/// other status, and an answer that is no page.
+pub fn site(status: u16, page: &str) -> Site {
+    /// What the pages of the network in front of the site carry, and no page of the site.
+    const IN_FRONT: [&str; 4] = ["cf-error-details", "cf-wrapper", "challenge-platform", "cf-chl"];
+    if out_of_season(page) {
+        return Site::OutOfSeason;
+    }
+    if status == 200 && is_board(page) {
+        return Site::Board;
+    }
+    let a_page = page.to_ascii_lowercase().contains("<html") && page.contains('>');
+    let its_own = !IN_FRONT.iter().any(|mark| page.contains(mark));
+    match status {
+        200 | 500 | 502 | 503 | 504 if a_page && its_own => Site::Blocked,
+        _ => Site::Unreachable,
+    }
+}
+
+/// What a page is headed by: the text of its `<title>`, on one line and no longer than a
+/// title is. Empty for a page without one.
+pub fn title(page: &str) -> String {
+    let lower = page.to_ascii_lowercase();
+    let inside = lower.find("<title").and_then(|at| Some(at + lower[at..].find('>')? + 1));
+    let text = inside.and_then(|from| Some(&page[from..from + lower[from..].find("</title")?]));
+    plain(text.unwrap_or_default()).chars().take(80).collect()
 }
 
 /// Whether a page of the test world says that the test world is closed altogether these
@@ -258,7 +381,7 @@ fn hours(title: &str) -> Option<(Minutes, Minutes)> {
     let clock = |text: &str| -> Option<Minutes> {
         let (hour, minute) = text.trim().split_once(':')?;
         let (hour, minute): (Minutes, Minutes) = (hour.trim().parse().ok()?, minute.trim().parse().ok()?);
-        ((0..=24).contains(&hour) && (0..60).contains(&minute)).then_some(hour * 60 + minute)
+        ((0..=24).contains(&hour) && (0..60).contains(&minute)).then(|| hour * 60 + minute)
     };
     title
         .split('(')
@@ -297,6 +420,29 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// has been forgotten on the board rather than extended: an extension is written down.
 const FORGOTTEN_AFTER: Minutes = 6 * 60;
 
+/// How long a maintenance that only the service lists is taken to go on past its planned
+/// end while the service could not be read again: after that it is over by the clock.
+const UNCONFIRMED_FOR: Seconds = 60;
+
+/// For how long past the planned end a block on the site keeps a maintenance going. A page
+/// that was misread for a block must not hold a maintenance for good: after this the block
+/// is passed over.
+pub const BLOCK_HOLDS_FOR: Minutes = 60;
+
+/// What is known of the block the game's site puts up while it is closed for a maintenance:
+/// in place of its pages it shows a screen that says so, and players take the game as open
+/// when that screen is gone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Block {
+    /// None was seen in this maintenance: not every maintenance closes the site.
+    #[default]
+    Unseen,
+    /// It was seen, and is still there.
+    There,
+    /// It was seen, and the site reads again.
+    Gone,
+}
+
 /// One maintenance, put together from what the service and the board say about it.
 struct Span {
     begins: Minutes,
@@ -311,13 +457,32 @@ struct Span {
 }
 
 impl Span {
-    /// Whether the game is closed for it at `now`.
+    /// Whether the game is closed for it at `now`, going by what the service said when it
+    /// was read at `listed`.
     ///
     /// The planned end is not the end: maintenance runs over, and is extended at the last
     /// minute. One the board has a notice of lasts until that notice says it is over. Only
-    /// one the board says nothing of goes by the clock.
-    fn underway(&self, now: Minutes) -> bool {
-        !self.over && now >= self.begins && (now < self.ends || (self.noticed && now <= self.ends + FORGOTTEN_AFTER))
+    /// one the board says nothing of goes by the clock, and by what the service lists once
+    /// its time is up: an end that was read before that time is a plan. It holds when the
+    /// service, read at that time or after, still lists nothing longer, or when the
+    /// service cannot be read for a while.
+    ///
+    /// The site's block says more than either: while it is there the maintenance goes on,
+    /// past its planned end too, for as long as [`BLOCK_HOLDS_FOR`]. Once it is gone the
+    /// maintenance lasts as long as its hours cover the moment and no longer, whatever the
+    /// board has or has not written yet.
+    fn underway(&self, now: Seconds, listed: Seconds, block: Block) -> bool {
+        let minute = now.div_euclid(60);
+        if self.over || minute < self.begins {
+            return false;
+        }
+        // Its hours are up by a reading of the service that was made before they were.
+        let unconfirmed = listed < self.ends * 60 && now < self.ends * 60 + UNCONFIRMED_FOR;
+        match (block, self.noticed) {
+            (Block::There, _) if minute < self.ends + BLOCK_HOLDS_FOR => true,
+            (Block::Gone, _) | (_, false) => minute < self.ends || unconfirmed,
+            (_, true) => minute <= self.ends + FORGOTTEN_AFTER,
+        }
     }
 
     /// Whether this is the maintenance that began at `begins`.
@@ -367,10 +532,22 @@ fn spans(planned: &[Planned], notices: &[Notice], now: Minutes) -> Vec<Span> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Underway {
     pub title: String,
+    /// When it began: the start of its hours, as the service lists them or, for one only
+    /// the board knows of, as its notice states them. Both always say. It stays what it is
+    /// when the maintenance is extended, which is what tells one maintenance from the next.
+    pub begins: Minutes,
     /// When it is planned to end.
     pub ends: Minutes,
     /// It has been extended: the board marks it so, or its planned end was seen to move.
     pub extended: bool,
+    /// The board has a notice of it, and says when it is over. One it has no notice of is
+    /// over when the service says so by the hours it lists.
+    pub noticed: bool,
+}
+
+/// When the next maintenance begins that is listed for later than `now`, if one is.
+pub fn next_start(planned: &[Planned], notices: &[Notice], now: Minutes) -> Option<Minutes> {
+    spans(planned, notices, now).iter().filter(|span| !span.over && span.begins > now).map(|span| span.begins).min()
 }
 
 /// What one look at the two sources says.
@@ -393,13 +570,30 @@ pub struct Watch {
     /// The maintenance seen underway at the last look: when it began, its planned end, and
     /// whether it was known to be extended.
     seen: Option<(Minutes, Minutes, bool)>,
+    /// What is known of the site's block in the maintenance underway; see [`Block`].
+    block: Block,
 }
 
 impl Watch {
-    /// Takes in what the service (`planned`) and the board (`notices`) say at `now`.
+    /// Takes in what is known of the site's block from here on: whoever reads the site
+    /// says so, for the maintenance that is underway.
+    pub fn site_block(&mut self, block: Block) {
+        self.block = block;
+    }
+
+    /// Takes in what the service (`planned`) and the board (`notices`) say at `now`, both
+    /// read at that minute.
     pub fn read(&mut self, planned: &[Planned], notices: &[Notice], now: Minutes) -> Reading {
-        let spans = spans(planned, notices, now);
-        let current = spans.iter().filter(|span| span.underway(now)).max_by_key(|span| span.ends);
+        self.read_as_of(planned, notices, now * 60, now * 60)
+    }
+
+    /// Takes in what the service (`planned`) and the board (`notices`) say at `now`, where
+    /// the service was last read at `listed`: what was read is held against the clock
+    /// between two readings, and how old it is decides what a planned end is worth.
+    pub fn read_as_of(&mut self, planned: &[Planned], notices: &[Notice], now: Seconds, listed: Seconds) -> Reading {
+        let spans = spans(planned, notices, now.div_euclid(60));
+        let block = self.block;
+        let current = spans.iter().filter(|span| span.underway(now, listed, block)).max_by_key(|span| span.ends);
         let mut reading = Reading::default();
         // The one underway was extended at an earlier look, or is at this one.
         let mut moved = false;
@@ -412,14 +606,20 @@ impl Watch {
                 // It is over when it is still listed and says so: marked as over on the
                 // board, or, where the board has no notice of it, past its time. One that
                 // has merely left both lists, or was forgotten on the board, is no news.
-                None => reading.ended = spans.iter().any(|span| span.began_at(begins) && (span.over || !span.noticed)),
+                // So is one whose block on the site was seen to go, once its hours are up.
+                None => {
+                    let said = |span: &Span| span.over || !span.noticed || block == Block::Gone;
+                    reading.ended = spans.iter().any(|span| span.began_at(begins) && said(span));
+                }
             }
         }
         self.seen = current.map(|span| (span.begins, span.ends, span.extended || moved));
         reading.underway = current.map(|span| Underway {
             title: span.title.clone(),
+            begins: span.begins,
             ends: span.ends,
             extended: span.extended || moved,
+            noticed: span.noticed,
         });
         reading.soon = current.is_some();
         reading
@@ -445,8 +645,8 @@ mod tests {
         }
     }
 
-    fn underway(title: &str, ends: Minutes) -> Option<Underway> {
-        Some(Underway { title: title.to_owned(), ends, extended: false })
+    fn underway(title: &str, begins: Minutes, ends: Minutes) -> Option<Underway> {
+        Some(Underway { title: title.to_owned(), begins, ends, extended: false, noticed: true })
     }
 
     // The list as the page has it, cut down to three notices of 2026-11-25.
@@ -618,6 +818,72 @@ mod tests {
     }
 
     #[test]
+    fn figures_that_are_no_date_and_no_time_are_not_read_as_one() {
+        // What a server sends is not to be trusted: none of these may be taken for a moment,
+        // and none may overflow the reckoning.
+        for text in [
+            "2026-11-19T04:00:00+9223372036854775807:00",
+            "9223372036854775807-11-19T04:00:00+09:00",
+            "999999999999-12-31T23:59:00+09:00",
+            "2026-99-99T99:99:99",
+            "2026-11-19T04:00:00+99:00",
+            "1999-11-19T04:00:00+09:00",
+        ] {
+            assert_eq!(stamp(text), None, "{text}");
+        }
+        assert_eq!(hours("11/26(목) 전체 월드 채널 점검 (9223372036854775807:00~10:00)"), None);
+        assert_eq!(hours("11/26(목) 전체 월드 채널 점검 (25:00~26:00)"), None);
+
+        // A maintenance that would last for years is a mistake in the answer, not a game closed
+        // for years.
+        let answer = |ends: &str| {
+            format!(
+                "<InspectionInfo diffgr:id=\"InspectionInfo1\"><startDateTime>2026-11-26T04:00:00+09:00</startDateTime>\
+                 <endDateTime>{ends}</endDateTime><strObstacleContents>패치</strObstacleContents></InspectionInfo>"
+            )
+        };
+        assert_eq!(read_inspection(&answer("2026-11-26T10:00:00+09:00")).len(), 1);
+        assert_eq!(read_inspection(&answer("2099-12-31T23:59:00+09:00")), []);
+    }
+
+    #[test]
+    fn a_page_that_is_no_board_is_told_from_a_board_without_notices() {
+        assert!(is_board(PAGE) && is_board(TEST_PAGE));
+        assert!(is_board("<div class=\"news_board\"><ul></ul></div>"));
+        for page in [
+            "",
+            "<html><body>로그인이 필요합니다</body></html>",
+            "<a href=\"/News/Notice/Inspection/1\"><span>x</span></a>",
+        ] {
+            assert!(!is_board(page), "{page}");
+            assert_eq!(read_board(page), []);
+        }
+    }
+
+    #[test]
+    fn a_page_of_any_size_and_shape_is_read_in_one_pass() {
+        // Twenty thousand notices, the half of them cut off before their link ends: read once
+        // from front to back, whatever the page holds.
+        let mut page = String::from("<div class=\"news_board\">");
+        for id in 0..20_000 {
+            let end = if id % 2 == 0 { "</a>" } else { "" };
+            page.push_str(&format!("<a href=\"/News/Notice/Inspection/{id}\"><span>11/26(목) 점검 {id}</span>{end}"));
+        }
+        let notices = read_board(&page);
+        assert_eq!(notices.len(), 20_000);
+        assert_eq!((notices[0].id, notices[19_999].id), (0, 19_999));
+        assert_eq!(notices[1].title, "11/26(목) 점검 1");
+    }
+
+    #[test]
+    fn a_moment_of_another_day_is_shown_with_its_date() {
+        let now = at(2026, 11, 26, 23, 40);
+        assert_eq!(shown(at(2026, 11, 26, 23, 59), now), "23:59");
+        assert_eq!(shown(at(2026, 11, 27, 2, 0), now), "2026.11.27 02:00");
+        assert_eq!(shown(at(2027, 1, 1, 0, 5), at(2026, 12, 31, 23, 0)), "2027.01.01 00:05");
+    }
+
+    #[test]
     fn each_client_has_its_own_sources() {
         assert!(LIVE.board_url.ends_with("/News/Notice/Inspection"));
         let service = LIVE.inspection.as_ref().expect("the service lists the live game");
@@ -644,7 +910,7 @@ mod tests {
         // that time the next look should come soon.
         for now in [at(2026, 11, 26, 4, 0), at(2026, 11, 26, 9, 59), at(2026, 11, 26, 10, 20)] {
             let reading = watch.read(&listed, &[open.clone(), other.clone()], now);
-            let closed = underway(&listed[0].text, at(2026, 11, 26, 10, 0));
+            let closed = underway(&listed[0].text, at(2026, 11, 26, 4, 0), at(2026, 11, 26, 10, 0));
             assert_eq!(reading, Reading { underway: closed, soon: true, ..Reading::default() });
         }
         // Marked as over: it ends, once.
@@ -721,8 +987,169 @@ mod tests {
         // The board could not be read, or has no notice of what the service lists.
         let listed = [planned(at(2026, 11, 26, 4, 0), at(2026, 11, 26, 10, 0))];
         let mut watch = Watch::default();
-        assert!(watch.read(&listed, &[], at(2026, 11, 26, 9, 59)).underway.is_some());
+        let reading = watch.read(&listed, &[], at(2026, 11, 26, 9, 59));
+        let by_the_service = |closed: Option<Underway>| closed.map(|closed| Underway { noticed: false, ..closed });
+        let first = by_the_service(underway(&listed[0].text, at(2026, 11, 26, 4, 0), at(2026, 11, 26, 10, 0)));
+        assert_eq!(reading.underway, first);
         assert_eq!(watch.read(&listed, &[], at(2026, 11, 26, 10, 0)), Reading { ended: true, ..Reading::default() });
+
+        // Extended only after its time was up: it is underway again, and when it began is
+        // what it was. That is how it is known for the same maintenance going on.
+        let longer = [planned(at(2026, 11, 26, 4, 0), at(2026, 11, 26, 12, 0))];
+        let reading = watch.read(&longer, &[], at(2026, 11, 26, 10, 5));
+        let again = by_the_service(underway(&longer[0].text, at(2026, 11, 26, 4, 0), at(2026, 11, 26, 12, 0)));
+        assert_eq!(reading, Reading { underway: again, soon: true, ..Reading::default() });
+        // The next one begins at another time.
+        let next = [planned(at(2026, 12, 3, 4, 0), at(2026, 12, 3, 10, 0))];
+        let began = watch.read(&next, &[], at(2026, 12, 3, 5, 0)).underway.map(|closed| closed.begins);
+        assert_eq!(began, Some(at(2026, 12, 3, 4, 0)));
+    }
+
+    /// The planned end of a maintenance that only the service lists is a plan until the
+    /// service was read at that time or after: Nexon extends at the last minute.
+    #[test]
+    fn a_planned_end_holds_once_the_service_was_read_at_it_and_lists_nothing_longer() {
+        let listed = [planned(at(2026, 11, 26, 4, 0), at(2026, 11, 26, 10, 0))];
+        let longer = [planned(at(2026, 11, 26, 4, 0), at(2026, 11, 26, 12, 0))];
+        let end = at(2026, 11, 26, 10, 0) * 60;
+        let over = Reading { ended: true, ..Reading::default() };
+
+        // Read twenty seconds before its time is up: at that time it is not over yet, to
+        // the second, and it is with the reading made half a second into the minute.
+        let mut watch = Watch::default();
+        assert!(watch.read_as_of(&listed, &[], end - 1, end - 20).underway.is_some());
+        let waiting = watch.read_as_of(&listed, &[], end, end - 20);
+        assert!(waiting.underway.is_some() && !waiting.ended && waiting.soon);
+        assert_eq!(watch.read_as_of(&listed, &[], end + 1, end), over);
+        assert_eq!(watch.read_as_of(&listed, &[], end + 2, end), Reading::default());
+
+        // That reading lists it as going on until noon: extended, and never over.
+        let mut watch = Watch::default();
+        assert!(watch.read_as_of(&listed, &[], end, end - 20).underway.is_some());
+        let reading = watch.read_as_of(&longer, &[], end + 1, end);
+        assert_eq!(reading.extended, Some(at(2026, 11, 26, 12, 0)));
+        assert!(!reading.ended && reading.underway.is_some_and(|closed| closed.extended));
+
+        // The service cannot be read: over by the clock after a minute, and not before.
+        let mut watch = Watch::default();
+        assert!(watch.read_as_of(&listed, &[], end - 1, end - 20).underway.is_some());
+        assert!(watch.read_as_of(&listed, &[], end + 59, end - 20).underway.is_some());
+        assert_eq!(watch.read_as_of(&listed, &[], end + 60, end - 20), over);
+
+        // One the board has a notice of does not go by any of this: the notice says.
+        let open = notice(9, PATCH);
+        let mut watch = Watch::default();
+        let reading = watch.read_as_of(&listed, std::slice::from_ref(&open), end + 600, end + 590);
+        assert!(reading.underway.is_some_and(|closed| closed.noticed));
+    }
+
+    #[test]
+    fn an_answer_is_the_board_a_block_or_nothing_to_go_by() {
+        let board = format!("<html><head><title>공지</title></head><body><div {BOARD}></div></body></html>");
+        let other = "<!DOCTYPE html><HTML><head><title> 메이플스토리 \n 점검 안내 </title></head><body>점검 중입니다.</body></html>";
+        assert_eq!(site(200, &board), Site::Board);
+        assert_eq!(site(200, "<html><body>운영기간이 아닙니다</body></html>"), Site::OutOfSeason);
+        // The site's own answer that is not the board: another page, or the page of a
+        // server that is closed or broken.
+        for status in [200, 500, 502, 503, 504] {
+            assert_eq!(site(status, other), Site::Blocked, "{status}");
+        }
+        // The board's own page under such a status is no board, and is the site's answer.
+        assert_eq!(site(503, &board), Site::Blocked);
+        // Turned away, or any other status: nothing to go by.
+        for status in [301, 400, 401, 403, 404, 429, 520, 521, 522] {
+            assert_eq!(site(status, other), Site::Unreachable, "{status}");
+        }
+        // No page at all, and the pages of the network in front of the site.
+        for (status, page) in [(200, ""), (200, "점검 중입니다."), (503, "Service Unavailable")] {
+            assert_eq!(site(status, page), Site::Unreachable, "{status} {page:?}");
+        }
+        let checked = "<html><head><title>Just a moment...</title></head><body><script src=\"/cdn-cgi/challenge-platform/h/b/orchestrate\"></script></body></html>";
+        let broken = "<html><head><title>502: Bad gateway</title></head><body><div id=\"cf-wrapper\"><div id=\"cf-error-details\"></div></div></body></html>";
+        assert_eq!(
+            (site(503, checked), site(200, checked), site(502, broken)),
+            (Site::Unreachable, Site::Unreachable, Site::Unreachable)
+        );
+
+        assert_eq!(title(other), "메이플스토리 점검 안내");
+        assert_eq!(
+            (title("<html><body>none</body></html>"), title("<title>unfinished")),
+            (String::new(), String::new())
+        );
+        assert_eq!(title(&format!("<title>{}</title>", "가".repeat(200))).chars().count(), 80);
+    }
+
+    /// The block the site puts up says more than the hours and the board: it holds a
+    /// maintenance past its planned end, and ends it when it is gone.
+    #[test]
+    fn a_block_on_the_site_holds_a_maintenance_and_ends_it_when_it_is_gone() {
+        let listed = [planned(at(2026, 11, 26, 4, 0), at(2026, 11, 26, 10, 0))];
+        let end = at(2026, 11, 26, 10, 0) * 60;
+        let over = Reading { ended: true, ..Reading::default() };
+        let seen = |block: Block| {
+            let mut watch = Watch::default();
+            watch.site_block(block);
+            assert!(watch.read_as_of(&listed, &[], end - 60, end - 60).underway.is_some());
+            watch
+        };
+
+        // There: it goes on past its planned end, whatever the service still lists.
+        let mut watch = seen(Block::There);
+        let held = watch.read_as_of(&listed, &[], end + 300, end + 300);
+        assert!(held.underway.is_some() && !held.ended && held.soon);
+        // Gone: over at once, the hours being up.
+        watch.site_block(Block::Gone);
+        assert_eq!(watch.read_as_of(&listed, &[], end + 301, end + 300), over);
+
+        // Gone while the hours still cover the moment: not over yet, and over as they end.
+        let mut watch = seen(Block::Gone);
+        assert!(watch.read_as_of(&listed, &[], end - 1, end - 60).underway.is_some());
+        assert!(watch.read_as_of(&listed, &[], end, end - 60).underway.is_some());
+        assert_eq!(watch.read_as_of(&listed, &[], end, end), over);
+
+        // There for an hour past the planned end: passed over, and the clock holds again.
+        let mut watch = seen(Block::There);
+        assert!(watch.read_as_of(&listed, &[], end + 3599, end + 3590).underway.is_some());
+        assert_eq!(watch.read_as_of(&listed, &[], end + 3600, end + 3590), over);
+
+        // A maintenance the board has a notice of, not marked as over yet: with the block
+        // gone and its hours up it is over all the same, and without a block it is not.
+        let open = notice(9, PATCH);
+        let mut watch = seen(Block::Unseen);
+        assert!(watch.read_as_of(&listed, std::slice::from_ref(&open), end + 300, end + 300).underway.is_some());
+        watch.site_block(Block::Gone);
+        assert_eq!(watch.read_as_of(&listed, &[open], end + 301, end + 300), over);
+    }
+
+    #[test]
+    fn the_time_a_server_states_is_read_from_its_date_header() {
+        let stated = stated_time("Thu, 26 Nov 2026 09:04:04 GMT");
+        assert_eq!(stated, Some(at(2026, 11, 26, 18, 4) * 60 + 4));
+        assert_eq!(stated_time(" Sun, 01 Mar 2026 00:00:00 GMT "), Some(at(2026, 3, 1, 9, 0) * 60));
+        for other in [
+            "",
+            "now",
+            "Thu, 26 Nov 2026 09:04:04",
+            "Thu, 26 Nov 2026 9:04:04 GMT",
+            "Thu, 26 Nov 2026 25:04:04 GMT",
+            "Thu, 26 Nob 2026 09:04:04 GMT",
+            "Thu, 32 Nov 2026 09:04:04 GMT",
+            "Thursday, 26-Nov-26 09:04:04 GMT",
+        ] {
+            assert_eq!(stated_time(other), None, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn the_next_start_is_that_of_the_first_maintenance_listed_for_later() {
+        let listed = [planned(at(2026, 11, 26, 4, 0), at(2026, 11, 26, 10, 0))];
+        let check = notice(7, "11/26(목) 전체 월드 채널 점검 (17:00~17:50)");
+        let notices = [check, notice(9, PATCH)];
+        assert_eq!(next_start(&listed, &notices, at(2026, 11, 25, 20, 0)), Some(at(2026, 11, 26, 4, 0)));
+        // Once it has begun, the next one is the one after it.
+        assert_eq!(next_start(&listed, &notices, at(2026, 11, 26, 4, 0)), Some(at(2026, 11, 26, 17, 0)));
+        assert_eq!(next_start(&listed, &notices, at(2026, 11, 26, 17, 0)), None);
+        assert_eq!(next_start(&[], &[], at(2026, 11, 26, 3, 0)), None);
     }
 
     #[test]
@@ -732,7 +1159,8 @@ mod tests {
         let check = "11/26(목) 전체 월드 채널 점검 (17:00~17:50)";
         let mut watch = Watch::default();
         let reading = watch.read(&old, &[notice(7, check)], at(2026, 11, 26, 17, 55));
-        assert_eq!(reading.underway, underway(check, at(2026, 11, 26, 17, 50)));
+        // When it began is what its notice states.
+        assert_eq!(reading.underway, underway(check, at(2026, 11, 26, 17, 0), at(2026, 11, 26, 17, 50)));
         let over = notice(7, "[점검완료] 11/26(목) 전체 월드 채널 점검 (17:00~17:50)");
         assert_eq!(watch.read(&old, &[over], at(2026, 11, 26, 17, 58)), Reading { ended: true, ..Reading::default() });
     }

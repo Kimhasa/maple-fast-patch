@@ -5,7 +5,7 @@
 //! `2` delete. Newer patch files put a table of original-file checksums in front of the list;
 //! older ones store the original checksum inside each rebuild entry.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -15,9 +15,16 @@ use crate::preflight;
 
 /// Windows `MAX_PATH`; file names in a patch file never exceed it.
 const MAX_NAME: u64 = 260;
+/// The longest one part of a name can be: NTFS gives no file or folder a longer name,
+/// however short the whole path is.
+const MAX_PART: usize = 255;
 /// Entries, and original files listed, in one patch file. Real patches have about a
 /// thousand; the limit keeps a made-up file from filling memory with millions.
 const MAX_ENTRIES: usize = 100_000;
+/// Original files named as what a rebuild copies from, counted over all the rebuilds of one
+/// patch file. Real patches name a few thousand. Every name is kept, and a made-up file of a
+/// few megabytes can name hundreds of millions.
+const MAX_SOURCES: usize = 1_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Layout {
@@ -72,6 +79,10 @@ pub struct Plan {
     pub entries: Vec<Entry>,
     /// Size of the decompressed contents.
     pub contents_len: u64,
+    /// For each original file that a rebuild copies from, where the copy that reaches
+    /// furthest into it ends: the least that original has to be long. An original that is
+    /// the file the patch was made for and is shorter than this shows a patch that lies.
+    pub reach: BTreeMap<String, u64>,
 }
 
 impl Plan {
@@ -118,7 +129,11 @@ pub fn scan(patch: &PatchFile, stop: &AtomicBool) -> Result<Plan> {
     let mut entries = Vec::new();
     // Windows treats names that differ only in case as one file, so two entries for one
     // file are refused in either spelling.
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
+    // What the plan has grown to, which a made-up file must not be able to drive up
+    // without end.
+    let (mut sources_named, mut new_bytes) = (0usize, 0u64);
+    let mut reach: BTreeMap<String, u64> = BTreeMap::new();
 
     while let Some((name, header)) = read_header(&mut stream, layout)? {
         if stop.load(Ordering::Relaxed) {
@@ -132,24 +147,14 @@ pub fn scan(patch: &PatchFile, stop: &AtomicBool) -> Result<Plan> {
                 Action::Create { len, crc }
             }
             Header::Rebuild { old_crc, new_crc } => {
-                let mut new_len = 0u64;
-                let mut sources = BTreeSet::new();
-                read_ops(&mut stream, layout, &name, |op, stream| {
-                    match op {
-                        Op::Literal { len } => {
-                            stream.skip(len)?;
-                            new_len += len;
-                        }
-                        Op::Fill { len, .. } => new_len += len,
-                        Op::Copy { from, len, .. } => {
-                            new_len += len;
-                            sources.insert(from);
-                        }
-                    }
-                    Ok(())
-                })?;
+                let (new_len, copied) = scan_ops(&mut stream, layout, &name, MAX_SOURCES - sources_named, stop)?;
+                sources_named += copied.len();
+                for (source, end) in &copied {
+                    let furthest = reach.entry(source.clone()).or_default();
+                    *furthest = (*furthest).max(*end);
+                }
                 let old_crc = old_crc.or_else(|| originals.get(&name).copied());
-                Action::Rebuild { old_crc, new_crc, new_len, sources }
+                Action::Rebuild { old_crc, new_crc, new_len, sources: copied.into_keys().collect() }
             }
         };
         if !seen.insert(name.to_ascii_lowercase().replace('/', "\\")) {
@@ -158,10 +163,73 @@ pub fn scan(patch: &PatchFile, stop: &AtomicBool) -> Result<Plan> {
         if entries.len() >= MAX_ENTRIES {
             return Err(Error::corrupt("more entries than any patch has"));
         }
-        entries.push(Entry { name, action });
+        let entry = Entry { name, action };
+        new_bytes =
+            new_bytes.checked_add(entry.new_len()).ok_or_else(|| Error::corrupt("new files beyond any drive"))?;
+        entries.push(entry);
     }
+    refuse_file_that_is_a_folder(&entries)?;
 
-    Ok(Plan { layout, originals, entries, contents_len: stream.position() })
+    Ok(Plan { layout, originals, entries, contents_len: stream.position(), reach })
+}
+
+/// Reads the instructions of one rebuild for what the plan keeps of them: how long the new
+/// file is, and which original files it is copied from, of which there may be `most`, each
+/// with where the copy that reaches furthest into it ends.
+///
+/// One entry can hold as many instructions as the patch file has room for, so a pause is
+/// looked for at every one of them.
+fn scan_ops(
+    stream: &mut PatchStream,
+    layout: Layout,
+    name: &str,
+    most: usize,
+    stop: &AtomicBool,
+) -> Result<(u64, BTreeMap<String, u64>)> {
+    let mut new_len = 0u64;
+    let mut sources: BTreeMap<String, u64> = BTreeMap::new();
+    read_ops(stream, layout, name, |op, stream| {
+        if stop.load(Ordering::Relaxed) {
+            return Err(Error::Stopped);
+        }
+        let len = match op {
+            Op::Literal { len } => {
+                stream.skip(len)?;
+                len
+            }
+            Op::Fill { len, .. } => len,
+            Op::Copy { from, start, len } => {
+                // Both are under 2^32, so their sum is a number.
+                let furthest = sources.entry(from).or_default();
+                *furthest = (*furthest).max(start + len);
+                if sources.len() > most {
+                    return Err(Error::corrupt("copies from more original files than any patch does"));
+                }
+                len
+            }
+        };
+        new_len = new_len.checked_add(len).ok_or_else(|| Error::corrupt(format!("{name} is longer than any file")))?;
+        Ok(())
+    })?;
+    Ok((new_len, sources))
+}
+
+/// Refuses a patch that needs one name to be a file and a folder at once: a file it writes,
+/// and a folder it makes or puts something into. Nothing can be done in an order that gives
+/// it both. The safe way would find out while it applies and undo everything; the immediate
+/// way would find out with the first of the two in its place for good.
+fn refuse_file_that_is_a_folder(entries: &[Entry]) -> Result<()> {
+    let writes_file = |entry: &&Entry| matches!(entry.action, Action::Create { .. } | Action::Rebuild { .. });
+    let files: HashSet<String> = entries.iter().filter(writes_file).map(|entry| name_key(&entry.name)).collect();
+    for entry in entries.iter().filter(|entry| entry.action != Action::Delete) {
+        let key = name_key(&entry.name);
+        // The folders this entry needs: every one above it, and itself if it makes one.
+        let itself = (entry.action == Action::CreateDir).then_some(key.as_str());
+        if let Some(both) = folders_above(&key).chain(itself).find(|folder| files.contains(*folder)) {
+            return Err(Error::corrupt(format!("{both} is a file and a folder in one patch")));
+        }
+    }
+    Ok(())
 }
 
 /// Opens the contents and works out which layout they use.
@@ -225,6 +293,11 @@ pub(crate) fn read_header(stream: &mut PatchStream, layout: Layout) -> Result<Op
             Header::Create { len, crc }
         }
         1 => {
+            // A name that ends the way a folder's does would be a second spelling of the
+            // file's name, and get one file past the check that no file comes twice.
+            if names_folder(&name) {
+                return Err(Error::corrupt(format!("{name} is rebuilt, and named the way a folder is")));
+            }
             let old_crc = match layout {
                 Layout::PerEntry => Some(stream.read_u32()?),
                 Layout::Table => None,
@@ -309,6 +382,7 @@ pub fn relative_path(name: &str) -> Result<PathBuf> {
     let mut path = PathBuf::new();
     for part in trimmed.split(['\\', '/']) {
         let bad = part.is_empty()
+            || part.len() > MAX_PART
             || part == "."
             || part == ".."
             || part.contains(':')
@@ -354,6 +428,15 @@ pub fn names_folder(name: &str) -> bool {
 /// Public for tools that look inside a patch file, where one file comes under both spellings.
 pub fn name_key(name: &str) -> String {
     name.trim_end_matches(['\\', '/']).replace('/', "\\").to_lowercase()
+}
+
+/// The folders above a name that is in the form of [`name_key`], nearest first: `data\skill`
+/// and `data` for `data\skill\a.wz`.
+///
+/// What is asked about a name and everything above it is asked this way, of a set, and not
+/// of every other entry in turn: a patch may have a hundred thousand entries.
+pub(crate) fn folders_above(key: &str) -> impl Iterator<Item = &str> {
+    key.rmatch_indices('\\').map(|(at, _)| &key[..at])
 }
 
 /// Reads only the table of original-file checksums at the front of a patch file.
@@ -440,5 +523,42 @@ mod tests {
         assert!(!has_extension(r"Data\Packs"));
         assert!(!has_extension(r"Data.v2\Packs"));
         assert!(!has_extension("Folder."));
+    }
+
+    #[test]
+    fn part_of_a_name_longer_than_a_file_name_can_be_is_refused() {
+        let part = |len: usize| "n".repeat(len);
+        assert!(relative_path(&part(255)).is_ok());
+        assert!(relative_path(&format!(r"Data\{}.wz", part(251))).is_ok());
+        for name in [part(256), format!(r"Data\{}", part(256)), format!(r"{}\x.wz", part(256))] {
+            assert!(
+                matches!(relative_path(&name), Err(Error::UnsafePath(_))),
+                "{} characters were accepted",
+                name.len()
+            );
+        }
+    }
+
+    #[test]
+    fn folders_above_a_name_come_nearest_first() {
+        assert_eq!(folders_above(r"data\skill\a.wz").collect::<Vec<_>>(), [r"data\skill", "data"]);
+        assert_eq!(folders_above("a.wz").count(), 0);
+    }
+
+    #[test]
+    fn name_that_is_a_file_and_a_folder_in_one_patch_is_refused() {
+        let entry = |name: &str, action: Action| Entry { name: name.to_owned(), action };
+        let file = |name: &str| entry(name, Action::Create { len: 1, crc: 0 });
+        let refused = |entries: &[Entry]| matches!(refuse_file_that_is_a_folder(entries), Err(Error::CorruptPatch(_)));
+        // A file and something below it, in either order and in any spelling.
+        assert!(refused(&[file(r"Data\A.wz"), file(r"Data\A.wz\b.wz")]));
+        assert!(refused(&[file(r"data/a.WZ/b.wz"), file(r"Data\A.wz")]));
+        assert!(refused(&[file(r"Data\A.wz"), entry(r"Data\A.wz\Sub", Action::CreateDir)]));
+        // A folder that is made, and a file of its name.
+        assert!(refused(&[entry(r"Data\New\", Action::CreateDir), file(r"Data\New")]));
+        // A delete below a file takes nothing that the file needs, and a folder with files
+        // in it is what every patch has.
+        assert!(!refused(&[file(r"Data\A.wz"), entry(r"Data\A.wz\b.wz", Action::Delete)]));
+        assert!(!refused(&[entry(r"Data\New", Action::CreateDir), file(r"Data\New\a.wz"), file(r"Data\New\b.wz")]));
     }
 }

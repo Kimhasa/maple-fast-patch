@@ -9,14 +9,17 @@
 //! `--server` says which client the folder is of: the folder must hold that client's game
 //! program, and that client's programs must not be running. Without it the live client.
 //!
-//! `--immediate` allows the immediate way of patching, as the player does in the app. The
-//! engine takes it only when the new files do not fit next to the old ones.
+//! `--immediate` chooses the immediate way of patching, as the player does in the app. The
+//! run then goes that way whatever room the drive has, and is refused on a drive that is not
+//! NTFS. Without it the run goes the safe way, and is refused where the new files do not fit
+//! next to the old ones. A folder that an earlier run left half patched is finished the
+//! immediate way with or without it.
 //!
-//! `--pretend-drive-size` makes that happen on a drive with plenty of room. The run is told
-//! that the test folder is on a drive of that many bytes which holds nothing else, so what
-//! is free there goes down and up with every byte the folder grows and shrinks, and is the
-//! same when a run that was cut off is started again. Such a run says in its first lines and
-//! its last that the drive was pretended: it rehearses a tight drive and is not one.
+//! `--pretend-drive-size` rehearses a drive with little room on one that has plenty. The run
+//! is told that the test folder is on a drive of that many bytes which holds nothing else,
+//! so what is free there goes down and up with every byte the folder grows and shrinks, and
+//! is the same when a run that was cut off is started again. Such a run says in its first
+//! lines and its last that the drive was pretended: it rehearses a tight drive and is not one.
 //!
 //! `--slack` is the room the immediate way asks for at its start beyond the least it can work
 //! with. Without it, what the app uses.
@@ -40,14 +43,14 @@ fn main() -> std::process::ExitCode {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let (mut plain, mut allow_immediate, mut drive_size, mut slack) = (Vec::new(), false, None, immediate::SLACK);
+    let (mut plain, mut immediate_chosen, mut drive_size, mut slack) = (Vec::new(), false, None, immediate::SLACK);
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let programs = clients::programs(clients::take_server(&mut args)?.client());
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let mut number = || args.next().and_then(|text| text.parse::<u64>().ok()).ok_or(format!("{arg} needs bytes"));
         match arg.as_str() {
-            "--immediate" => allow_immediate = true,
+            "--immediate" => immediate_chosen = true,
             "--pretend-drive-size" => drive_size = Some(number()?),
             "--slack" => slack = number()?,
             other if other.starts_with("--") => return Err(format!("unknown option {other}").into()),
@@ -89,7 +92,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let started = Instant::now();
     let options =
-        Options { install_dir: install_dir.clone(), source, immediate: allow_immediate, storage: Default::default() };
+        Options { install_dir: install_dir.clone(), source, immediate: immediate_chosen, storage: Default::default() };
     let pretended = if drive_size.is_some() { " (pretended)" } else { "" };
     let (finished, largest, least_free) =
         (AtomicBool::new(false), AtomicU64::new(folder_at_start), AtomicU64::new(free_at_start));
@@ -156,7 +159,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         available >> 20
                     )
                 }
-                Event::Restored => println!("          restored an interrupted apply first"),
+                Event::Restored(how) => println!("          put back an interrupted apply first ({how:?})"),
                 Event::Storage { file_system, seek_ms, slow, readers, checkers, unbuffered } => println!(
                     "          drive: {file_system}, a read far away takes {seek_ms:?} ms, slow: {slow}; \
                  {readers} readers, {checkers} checkers, past the file cache: {unbuffered}"

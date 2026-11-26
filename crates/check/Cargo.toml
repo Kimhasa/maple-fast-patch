@@ -1,0 +1,41 @@
+[package]
+name = "mfp-check"
+description = "Says what kind of PC this is (a home PC, or a PC room seat with or without a disk of its own) and whether a patch ahead of time is expected to work on it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+# Reads the files of the game and asks Nexon's patch server, the way a patch run does.
+mfp-engine = { path = "../engine" }
+# Which programs and which addresses belong to which of the two clients.
+mfp-kms = { path = "../kms" }
+# The start of a patch file is read from memory, so that nothing is written to this PC for it.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+
+[target.'cfg(windows)'.dependencies]
+# Everything the diagnostic asks of Windows is asked directly: how a drive is attached, what
+# is free on it, who runs this program, which programs and drivers run beside it.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_DataExchange",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_Memory",
+    "Win32_System_Registry",
+    "Win32_System_Services",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+] }
+
+[dev-dependencies]
+tempfile = "3.27"

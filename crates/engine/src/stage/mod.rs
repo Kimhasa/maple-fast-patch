@@ -15,9 +15,9 @@ pub use originals::{
     Checked, Fingerprint, check_originals, check_originals_except, check_originals_with, files_present, fingerprint,
     fingerprint_all,
 };
-pub(crate) use size::{bytes_certain_to_build, deletes};
+pub(crate) use size::{bytes_certain_to_build, deletes, told_by_sizes};
 pub use size::{bytes_to_build, changes_install};
 pub use work::{Dirs, half_patched};
-pub(crate) use work::{discard_foreign_work, pin, remove_work, staged_is_ours};
+pub(crate) use work::{discard_foreign_work, made_for, pin, remove, remove_unfinished, remove_work, staged_is_ours};
 
 const BUFFER: usize = 1 << 20;

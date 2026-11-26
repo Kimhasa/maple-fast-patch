@@ -141,6 +141,12 @@ impl PatchBuilder {
     }
 
     pub fn bytes(&self) -> Vec<u8> {
+        wrap(&self.contents())
+    }
+
+    /// The contents of the patch file before they are compressed: the table of originals,
+    /// where the layout has one, and the entries.
+    pub fn contents(&self) -> Vec<u8> {
         let mut contents = Vec::new();
         if self.layout == Layout::Table {
             contents.extend((self.originals.len() as u32).to_le_bytes());
@@ -151,15 +157,26 @@ impl PatchBuilder {
             }
         }
         contents.extend(&self.body);
-
-        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
-        encoder.write_all(&contents).unwrap();
-        let payload = encoder.finish().unwrap();
-
-        let mut file = b"WzPatch\x1A".to_vec();
-        file.extend(2u32.to_le_bytes());
-        file.extend(crc::update(0, &payload).to_le_bytes());
-        file.extend(payload);
-        file
+        contents
     }
+}
+
+/// Makes a patch file of `contents`, whatever they are: compressed, and behind a header
+/// with the checksum that is right for them. A test that changes the contents by hand gets
+/// a file that passes every check made on the file itself, so that what is tried is the
+/// reading of the contents.
+pub fn wrap(contents: &[u8]) -> Vec<u8> {
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(contents).unwrap();
+    with_header(&encoder.finish().unwrap())
+}
+
+/// Puts the header of a patch file in front of `payload`, which is taken as it is, with the
+/// checksum that is right for it.
+pub fn with_header(payload: &[u8]) -> Vec<u8> {
+    let mut file = b"WzPatch\x1A".to_vec();
+    file.extend(2u32.to_le_bytes());
+    file.extend(crc::update(0, payload).to_le_bytes());
+    file.extend(payload);
+    file
 }

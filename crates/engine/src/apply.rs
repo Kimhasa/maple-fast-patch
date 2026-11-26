@@ -13,13 +13,19 @@ use crate::busy::when_free;
 use crate::error::{Error, Result, blocked_unless_empty};
 use crate::plan::{self, Action, Plan};
 use crate::preflight::{self, Problem};
+use crate::restore;
 use crate::stage::{self, Checked, Dirs};
 
 /// Journal line kinds.
 ///
-/// `B <slot> <name>`: what was at `name` is being moved to backup slot `slot`.
+/// `M <step> <name>`: what was at `name` is being moved aside, to `aside\<step>\<name>`.
 /// `N <name>`: a new file is being placed at `name`, where nothing was.
 /// `D <name>`: the folder `name` is being created.
+/// `B <slot> <name>`: what earlier versions wrote where this one writes `M`. They moved what
+/// was at `name` to `backup\<slot>`, a place that does not say where its contents came from.
+/// Read, so that an apply those versions were cut off in can still be undone; never written.
+/// A version that only knows `B` cannot read an `M`, and so leaves such a journal alone.
+const MOVED_ASIDE: &str = "M";
 const BACKED_UP: &str = "B";
 const PLACED_NEW: &str = "N";
 const MADE_DIR: &str = "D";
@@ -33,6 +39,19 @@ pub enum Leftover {
     Staged,
     /// An apply had stopped halfway; the install folder was put back as it was.
     RolledBack,
+    /// An apply had stopped halfway and its journal could not be read. The install folder
+    /// was put back from what the apply had moved aside, and then checked against the patch
+    /// file: for every file that patch has a say about, it is the version before the patch.
+    Restored,
+    /// An apply had stopped halfway and its journal could not be read. Everything it had
+    /// moved aside is back in its place, but the folder is not vouched for as the version
+    /// before the patch. Either that could not be checked: the patch file was not at hand,
+    /// or the folder is half patched and never was that version. Or it was checked, and a
+    /// file is the new one with no original to put in its place, while everything the
+    /// patch still needs is in order: such a folder cannot go back, and the patch can be
+    /// applied to it as it is. The check of the originals that the next run makes is what
+    /// decides, as it does for every run.
+    PutBack,
 }
 
 /// What an apply tells of while it goes.
@@ -49,8 +68,13 @@ pub enum Step<'a> {
 /// Whether an apply was cut off in this install folder and is still to be undone. Until it
 /// is, files of the folder lie among the backups, and the folder may be short of the very
 /// things an install folder is known by.
+///
+/// The journal says so, and so does anything that still lies where an apply moves things
+/// aside: a journal can be lost. So does the note of an attempt to put the folder back that
+/// found it could not.
 pub(crate) fn cut_off(dirs: &Dirs) -> bool {
-    dirs.journal().exists() && !dirs.committed().exists()
+    let traces = dirs.journal().exists() || restore::holds_files(&dirs.aside()) || dirs.cannot_restore().exists();
+    traces && !dirs.committed().exists()
 }
 
 /// Files in the install folder that this plan will replace or delete.
@@ -95,8 +119,9 @@ pub fn apply(plan: &Plan, checked: &Checked, dirs: &Dirs, on_step: &mut dyn FnMu
     guard_work(dirs)?;
     blocked_unless_empty(preflight::check_inside_install(&dirs.install, &target_dirs(plan, dirs)))?;
 
+    begin_fresh(dirs)?;
     let journal = open_journal(dirs)?;
-    let mut applying = Applying { dirs, journal, next_slot: 0, fuse: None, placed: Vec::new() };
+    let mut applying = Applying { dirs, journal, next_step: 0, fuse: Fuse(None), placed: Vec::new() };
 
     let outcome = applying.entries(plan, checked, on_step).and_then(|count| {
         // From this point the patch counts as applied, even if cleanup is interrupted.
@@ -121,7 +146,7 @@ pub fn apply(plan: &Plan, checked: &Checked, dirs: &Dirs, on_step: &mut dyn FnMu
             let _ = fs::remove_file(dirs.committed());
             // The reason the apply failed is what the user needs; a failed restore is worse
             // and takes its place.
-            roll_back(dirs)?;
+            roll_back(dirs, &mut Fuse(None))?;
             Err(err)
         }
     }
@@ -136,8 +161,9 @@ pub fn apply(plan: &Plan, checked: &Checked, dirs: &Dirs, on_step: &mut dyn FnMu
 /// finished.
 #[doc(hidden)]
 pub fn apply_then_crash(plan: &Plan, checked: &Checked, dirs: &Dirs, fuse: usize) -> Result<bool> {
+    begin_fresh(dirs)?;
     let journal = open_journal(dirs)?;
-    let mut applying = Applying { dirs, journal, next_slot: 0, fuse: Some(fuse), placed: Vec::new() };
+    let mut applying = Applying { dirs, journal, next_step: 0, fuse: Fuse(Some(fuse)), placed: Vec::new() };
     match applying.entries(plan, checked, &mut |_| {}) {
         Ok(_) => Ok(true),
         Err(Error::Stopped) => Ok(false),
@@ -145,10 +171,77 @@ pub fn apply_then_crash(plan: &Plan, checked: &Checked, dirs: &Dirs, fuse: usize
     }
 }
 
+/// Undoes an apply that was cut off and abandons the undoing partway, leaving the install
+/// folder exactly as a crash or power cut at that moment would. For tests of [`recover`].
+///
+/// `fuse` counts the moments at which it can die: before a step is undone, between the two
+/// moves of a step that takes two, after a step is undone and before its line is cut from
+/// the journal, and after the last line, before the journal goes. Returns `true` when the
+/// fuse outlasted the undoing, which is then complete.
+#[doc(hidden)]
+pub fn undo_then_crash(dirs: &Dirs, fuse: usize) -> Result<bool> {
+    match roll_back(dirs, &mut Fuse(Some(fuse))) {
+        Ok(()) => Ok(true),
+        Err(Error::Stopped) => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
+/// Puts an install folder back without its journal and abandons that partway, leaving the
+/// folder exactly as a crash or power cut at that moment would. For tests of [`recover`].
+///
+/// `patch` is where the patch file may be, as for [`recover_with`]. `fuse` counts the moments
+/// at which it can die: before each thing that is moved, between the two moves that putting
+/// one file back can take, and before the traces of the apply are removed. Returns `true`
+/// when the fuse outlasted it all.
+#[doc(hidden)]
+pub fn restore_then_crash(dirs: &Dirs, patch: Option<&Path>, fuse: usize) -> Result<bool> {
+    match restore::restore(dirs, patch, "cut off for a test".to_owned(), &mut Fuse(Some(fuse))) {
+        Ok(_) => Ok(true),
+        Err(Error::Stopped) => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
+/// Makes sure that nothing of an apply before this one lies in the work folder: what it
+/// moved aside, and its mark of being finished. An apply that was cut off has been undone
+/// by now, and one that finished has been cleaned up after, so whatever is still there
+/// could not be removed at the time. It has to go before this apply moves anything aside:
+/// what lies there is taken for this apply's own if it is cut off.
+fn begin_fresh(dirs: &Dirs) -> Result<()> {
+    for left in [dirs.aside(), dirs.backup(), dirs.committed()] {
+        stage::remove(&left)?;
+    }
+    Ok(())
+}
+
+/// Test hook: the moments left before the work in hand is abandoned, as a crash would
+/// abandon it. `None` outside of tests: nothing is abandoned.
+pub(crate) struct Fuse(pub(crate) Option<usize>);
+
+impl Fuse {
+    /// One moment at which a crash could come has passed, or the crash comes.
+    pub(crate) fn burn(&mut self) -> Result<()> {
+        match &mut self.0 {
+            Some(0) => Err(Error::Stopped),
+            Some(left) => {
+                *left -= 1;
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+}
+
 /// Starts the journal of a new apply. No other program can delete or rename it while the
 /// apply holds it open: without the journal a failed apply could not be undone.
+///
+/// The work folder is made here if it is not there. It is there whenever something was
+/// built into it, but an apply may have nothing built to place: a patch that only deletes,
+/// or one whose new files the immediate way has all put in place already.
 fn open_journal(dirs: &Dirs) -> Result<File> {
-    let path = dirs.journal();
+    let (work, path) = (dirs.work(), dirs.journal());
+    fs::create_dir_all(&work).map_err(|e| Error::file("create", &work, e))?;
     let mut options = OpenOptions::new();
     options.create_new(true).append(true);
     #[cfg(windows)]
@@ -160,21 +253,51 @@ fn open_journal(dirs: &Dirs) -> Result<File> {
     options.open(&path).map_err(|e| Error::file("create", &path, e))
 }
 
-/// Refuses a work folder that is, or holds, a link to somewhere else. Everything in it is
-/// moved into the install folder or back, so it has to be the plain folder the engine made.
+/// Refuses a work folder that is, or holds anywhere in it, a link to somewhere else.
+///
+/// Whatever is in the work folder is the engine's to write, to move into the install folder
+/// and back, and to delete. Through a link all of that would be done to a folder somewhere
+/// else on the PC: its files deleted as work nobody needs, gigabytes built into it. So the
+/// work folder has to be the plain folder the engine made, all the way down. This is looked
+/// at before anything in it is touched, and again before each step that takes a while.
 pub(crate) fn guard_work(dirs: &Dirs) -> Result<()> {
-    for dir in [dirs.work(), dirs.staged(), dirs.backup()] {
-        if fs::symlink_metadata(&dir).is_ok_and(|meta| meta.file_type().is_symlink()) {
-            return Err(Error::Blocked(vec![Problem::OutsideInstall { dir }]));
+    let outside = |dir: PathBuf| Err(Error::Blocked(vec![Problem::OutsideInstall { dir }]));
+    let work = dirs.work();
+    if is_link(&work) {
+        return outside(work);
+    }
+    let (aside, backup) = (dirs.aside(), dirs.backup());
+    let mut folders = vec![work];
+    while let Some(folder) = folders.pop() {
+        // What cannot be listed is not there, or is no folder.
+        let Ok(children) = fs::read_dir(&folder) else { continue };
+        for child in children.flatten() {
+            let path = child.path();
+            match child.file_type() {
+                Ok(kind) if kind.is_symlink() => return outside(path),
+                // What was moved aside is not looked into: neither the folder of a step,
+                // which the apply makes itself the moment it uses it, nor the backups of
+                // earlier versions. It is moved back as it is, or removed, without any link
+                // in it being followed, and a folder of the install that was moved aside
+                // may well hold links of its own.
+                Ok(kind) if kind.is_dir() && folder != aside && path != backup => folders.push(path),
+                _ => {}
+            }
         }
     }
     Ok(())
 }
 
+/// Whether `path` is a link to somewhere else, of whatever kind, and whether or not what it
+/// leads to is there.
+pub(crate) fn is_link(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
 /// Refuses a path that a link has led out of the install folder. Undoing an apply moves
 /// files to the places its journal names; a planted link in one of those places must not
 /// turn that into moving files anywhere on the PC.
-fn guard_inside(dirs: &Dirs, path: &Path) -> Result<()> {
+pub(crate) fn guard_inside(dirs: &Dirs, path: &Path) -> Result<()> {
     let existing = path.ancestors().skip(1).find(|dir| dir.exists()).unwrap_or(&dirs.install);
     blocked_unless_empty(preflight::check_inside_install(&dirs.install, &[existing.to_path_buf()]))
 }
@@ -182,9 +305,9 @@ fn guard_inside(dirs: &Dirs, path: &Path) -> Result<()> {
 struct Applying<'a> {
     dirs: &'a Dirs,
     journal: File,
-    next_slot: usize,
-    /// Test hook: moments left before the apply is abandoned. See [`apply_then_crash`].
-    fuse: Option<usize>,
+    next_step: usize,
+    /// See [`apply_then_crash`].
+    fuse: Fuse,
     /// The new files that are in place so far, by the names the patch gives them.
     placed: Vec<String>,
 }
@@ -201,7 +324,7 @@ impl Applying<'_> {
                 Action::Delete => {
                     if stage::deletes(&entry.name, &target) {
                         on_step(Step::Begins(&entry.name));
-                        self.move_aside(&entry.name, &target)?;
+                        self.move_aside(&entry.name, &relative, &target)?;
                         count += 1;
                     }
                 }
@@ -219,7 +342,7 @@ impl Applying<'_> {
                         return Err(Error::file("replace", &target, in_the_way));
                     }
                     if target.exists() {
-                        self.move_aside(&entry.name, &target)?;
+                        self.move_aside(&entry.name, &relative, &target)?;
                     } else {
                         self.record(&format!("{PLACED_NEW}\t{}", entry.name))?;
                     }
@@ -249,36 +372,39 @@ impl Applying<'_> {
         Ok(())
     }
 
-    /// Moves a file or folder out of the install folder into its own backup slot.
-    fn move_aside(&mut self, name: &str, target: &Path) -> Result<()> {
-        let slot = self.next_slot;
-        self.next_slot += 1;
-        let backup = self.dirs.backup();
-        fs::create_dir_all(&backup).map_err(|e| Error::file("create", &backup, e))?;
-        self.record(&format!("{BACKED_UP}\t{slot}\t{name}"))?;
+    /// Moves a file or folder out of the install folder, to a place of its own that says
+    /// where it came from: `aside\<step>\<name>`. See [`Dirs::aside`].
+    fn move_aside(&mut self, name: &str, relative: &Path, target: &Path) -> Result<()> {
+        let aside = self.dirs.aside();
+        fs::create_dir_all(&aside).map_err(|e| Error::file("create", &aside, e))?;
+        // The folder of a step is made here and now, by this apply. One of that number
+        // that is there already is not this apply's, and nothing is moved into it.
+        let (step, folder) = loop {
+            let step = self.next_step;
+            self.next_step += 1;
+            let folder = aside.join(step.to_string());
+            match fs::create_dir(&folder) {
+                Ok(()) => break (step, folder),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(Error::file("create", &folder, e)),
+            }
+        };
+        self.record(&format!("{MOVED_ASIDE}\t{step}\t{name}"))?;
+        let kept = folder.join(relative);
+        if let Some(parent) = kept.parent() {
+            fs::create_dir_all(parent).map_err(|e| Error::file("create", parent, e))?;
+        }
         clear_read_only(target);
-        let slot = backup.join(slot.to_string());
-        when_free(|| fs::rename(target, &slot)).map_err(|e| Error::file("replace", target, e))
+        when_free(|| fs::rename(target, &kept)).map_err(|e| Error::file("replace", target, e))
     }
 
     /// The journal line is on disk before the step it describes happens.
     fn record(&mut self, line: &str) -> Result<()> {
-        self.burn()?;
+        self.fuse.burn()?;
         writeln!(self.journal, "{line}")
             .and_then(|()| self.journal.sync_data())
             .map_err(|e| Error::io("write the apply journal", e))?;
-        self.burn()
-    }
-
-    fn burn(&mut self) -> Result<()> {
-        match &mut self.fuse {
-            Some(0) => Err(Error::Stopped),
-            Some(left) => {
-                *left -= 1;
-                Ok(())
-            }
-            None => Ok(()),
-        }
+        self.fuse.burn()
     }
 }
 
@@ -320,8 +446,14 @@ fn clean_up(dirs: &Dirs) {
             if path == dirs.committed() {
                 continue;
             }
-            let _ = if path.is_dir() { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };
+            let _ = stage::remove(&path);
         }
+    }
+    // The mark also stays for as long as anything that was moved aside is still there.
+    // Without the mark beside it, that would read as an apply that was cut off, and be
+    // put back over the new files.
+    if fs::symlink_metadata(dirs.aside()).is_ok() {
+        return;
     }
     let _ = fs::remove_file(dirs.committed());
     let _ = fs::remove_dir(&work);
@@ -330,6 +462,24 @@ fn clean_up(dirs: &Dirs) {
 /// Looks for the work folder of an earlier run and brings the install folder to a known
 /// state: finished runs are cleaned up, half-applied ones are undone.
 pub fn recover(dirs: &Dirs) -> Result<Leftover> {
+    recover_with(dirs, None)
+}
+
+/// [`recover`] by a caller who knows where a patch file is: the one a run was given, say.
+///
+/// An apply that was cut off is undone from its journal. Where the journal cannot be read,
+/// or is gone, the folder is put back from what the apply moved aside, which says by itself
+/// where it belongs, and is then checked against the patch that was being applied: see
+/// [`Leftover::Restored`] and [`Leftover::PutBack`]. That patch is looked for among the
+/// patch files downloaded into the work folder, and at `patch`. It is told from any other
+/// by the id the work folder was made for, so a file that is another patch is never used.
+///
+/// Where the folder cannot be put back this way either, this fails with
+/// [`Problem::UnreadableJournal`], and says why in its `detail`.
+pub fn recover_with(dirs: &Dirs, patch: Option<&Path>) -> Result<Leftover> {
+    // Every use of an install folder begins here, so this is where a work folder that
+    // leads somewhere else is turned away before anything is done to it.
+    guard_work(dirs)?;
     if !dirs.work().exists() {
         return Ok(Leftover::None);
     }
@@ -337,9 +487,20 @@ pub fn recover(dirs: &Dirs) -> Result<Leftover> {
         clean_up(dirs);
         return Ok(Leftover::None);
     }
-    if dirs.journal().exists() {
-        roll_back(dirs)?;
-        return Ok(Leftover::RolledBack);
+    if cut_off(dirs) {
+        let trouble = match read_journal(dirs)? {
+            Journal::Lines(_) => {
+                roll_back(dirs, &mut Fuse(None))?;
+                // A journal that had lost lines leaves what those lines moved aside.
+                if !restore::holds_files(&dirs.aside()) {
+                    return Ok(Leftover::RolledBack);
+                }
+                "the journal lacked steps of the apply".to_owned()
+            }
+            Journal::Gone => "the journal is gone".to_owned(),
+            Journal::Unreadable(detail) => detail,
+        };
+        return restore::restore(dirs, patch, trouble, &mut Fuse(None));
     }
     // Patch files the app downloaded into the work folder are nothing a run left behind.
     if !preflight::holds_work(&dirs.work()) {
@@ -348,19 +509,127 @@ pub fn recover(dirs: &Dirs) -> Result<Leftover> {
     Ok(Leftover::Staged)
 }
 
-/// Undoes every journaled step, newest first. New files go back to the staging folder so the
-/// next run does not have to build them again.
-fn roll_back(dirs: &Dirs) -> Result<()> {
-    guard_work(dirs)?;
-    let journal_path = dirs.journal();
-    let journal = match fs::read_to_string(&journal_path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(Error::file("read", &journal_path, e)),
+/// What a line of the journal says an apply had begun to do.
+enum Begun {
+    /// What stood at this place in the install folder is moved aside, into the folder of
+    /// this step.
+    MovedAside { step: String, place: PathBuf },
+    /// The same as an earlier version did it: moved to this numbered slot among the backups.
+    BackedUp { slot: String, place: PathBuf },
+    /// A new file is placed here, where nothing was.
+    PlacedNew { place: PathBuf },
+    /// This folder is made.
+    MadeDir { place: PathBuf },
+}
+
+/// What one line of the journal says, or `None` for a line that this version cannot undo:
+/// one of a kind it does not write, with more or less to it than it writes, or naming a
+/// place that is not inside the install folder.
+fn read_line(line: &str) -> Option<Begun> {
+    let mut fields = line.split('\t');
+    let place = |name: &str| plan::relative_path(name).ok();
+    let number = |text: &str| (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())).then(|| text.to_owned());
+    match (fields.next()?, fields.next(), fields.next(), fields.next()) {
+        (MOVED_ASIDE, Some(step), Some(name), None) => {
+            Some(Begun::MovedAside { step: number(step)?, place: place(name)? })
+        }
+        (BACKED_UP, Some(slot), Some(name), None) => Some(Begun::BackedUp { slot: number(slot)?, place: place(name)? }),
+        (PLACED_NEW, Some(name), None, None) => Some(Begun::PlacedNew { place: place(name)? }),
+        (MADE_DIR, Some(name), None, None) => Some(Begun::MadeDir { place: place(name)? }),
+        _ => None,
+    }
+}
+
+/// The journal of an apply that was cut off, as far as it can be read.
+enum Journal {
+    /// There is none.
+    Gone,
+    /// What each line says, oldest first, with where in the file the line begins.
+    Lines(Vec<(usize, Begun)>),
+    /// A line of it cannot be read, or it is not text: what is wrong, for a log.
+    Unreadable(String),
+}
+
+/// Reads the journal of an apply that was cut off.
+///
+/// The whole journal is read before anything is undone. One line that cannot be read makes
+/// it a journal that cannot be read, and none of it is acted on: an undo that stops at such
+/// a line would leave the folder further from both the old version and the new one than it
+/// was.
+///
+/// A last line without its line break was cut off while being written. Its step never
+/// started, because a step only starts once its line is safely on disk, so whatever stands
+/// there is no part of the journal and says nothing against it.
+fn read_journal(dirs: &Dirs) -> Result<Journal> {
+    let path = dirs.journal();
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Journal::Gone),
+        // Not being able to open the file is no fault of what is in it.
+        Err(e) => return Err(Error::file("read", &path, e)),
     };
-    // A last line without its line break was cut off while being written. Its step never
-    // started, because a step only starts once its line is safely on disk.
-    let complete = journal.rfind('\n').map_or("", |end| &journal[..=end]);
+    let complete = bytes.iter().rposition(|byte| *byte == b'\n').map_or(&[][..], |end| &bytes[..=end]);
+    let Ok(complete) = std::str::from_utf8(complete) else {
+        return Ok(Journal::Unreadable("the journal is not text".to_owned()));
+    };
+
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for (number, line) in complete.split_terminator('\n').enumerate() {
+        let Some(begun) = read_line(line) else {
+            // A line of garbage can be as long as the file. A log needs its beginning.
+            let shown: String = line.chars().take(120).collect();
+            return Ok(Journal::Unreadable(format!("line {} of the journal: {shown:?}", number + 1)));
+        };
+        lines.push((start, begun));
+        start += line.len() + 1;
+    }
+    Ok(Journal::Lines(lines))
+}
+
+/// What is told of an apply that was cut off in this install folder and cannot be undone:
+/// its journal cannot be read, and the folder cannot be put back without it either. Only
+/// looks: for telling of it before anything is asked of the folder.
+///
+/// A journal that cannot be read is nothing to tell of by itself. The next start puts the
+/// folder back from what the apply moved aside, as it would have from the journal. This
+/// answers only where that is known to be out of reach: what was moved aside carries no
+/// names (an earlier version moved it), or putting the folder back was tried and failed.
+/// Whether it will work cannot be seen without trying, so a folder that has not been tried
+/// is not told of here; the try is what [`recover`] does.
+///
+/// A work folder that is a link is not looked into. It is refused for what it is.
+pub(crate) fn unreadable_journal(dirs: &Dirs) -> Option<Problem> {
+    if is_link(&dirs.work()) || !cut_off(dirs) {
+        return None;
+    }
+    let trouble = match read_journal(dirs) {
+        Ok(Journal::Unreadable(detail)) => detail,
+        Ok(Journal::Gone) => "the journal is gone".to_owned(),
+        _ => return None,
+    };
+    let why = restore::out_of_reach(dirs)?;
+    Some(Problem::UnreadableJournal { dir: dirs.work(), detail: format!("{trouble}; {why}") })
+}
+
+/// Whether the journal of the apply that was cut off in this install folder is one that
+/// cannot be read, or is gone.
+pub(crate) fn journal_cannot_be_read(dirs: &Dirs) -> bool {
+    matches!(read_journal(dirs), Ok(Journal::Unreadable(_) | Journal::Gone))
+}
+
+/// Undoes every journaled step, newest first. New files go back to the staging folder so the
+/// next run does not have to build them again. For `fuse` see [`undo_then_crash`].
+fn roll_back(dirs: &Dirs, fuse: &mut Fuse) -> Result<()> {
+    guard_work(dirs)?;
+    let lines = match read_journal(dirs)? {
+        Journal::Lines(lines) => lines,
+        Journal::Gone => return Ok(()),
+        Journal::Unreadable(detail) => {
+            return Err(Error::Blocked(vec![Problem::UnreadableJournal { dir: dirs.work(), detail }]));
+        }
+    };
+    let journal_path = dirs.journal();
     // Each line is cut from the journal once it is undone. If undoing stops halfway (a file
     // is held open, the power goes), the next attempt carries on from there instead of
     // undoing the same steps twice against a folder that has already changed back.
@@ -373,45 +642,51 @@ fn roll_back(dirs: &Dirs) -> Result<()> {
         when_free(cut).map_err(|e| Error::file("write", &journal_path, e))
     };
 
-    let mut end = complete.len();
-    for line in complete.lines().rev() {
-        let start = end - line.len() - 1;
-        let mut fields = line.split('\t');
-        match (fields.next(), fields.next(), fields.next()) {
-            (Some(BACKED_UP), Some(slot), Some(name))
-                if !slot.is_empty() && slot.bytes().all(|b| b.is_ascii_digit()) =>
-            {
-                let backup = dirs.backup().join(slot);
-                // The line may have been written without the move having happened.
-                if backup.exists() {
-                    let relative = plan::relative_path(name)?;
-                    let target = dirs.install.join(&relative);
-                    guard_inside(dirs, &target)?;
-                    unplace(&target, &dirs.staged().join(&relative))?;
-                    when_free(|| fs::rename(&backup, &target)).map_err(|e| Error::file("restore", &target, e))?;
-                }
-            }
-            (Some(PLACED_NEW), Some(name), None) => {
-                let relative = plan::relative_path(name)?;
-                let target = dirs.install.join(&relative);
+    for (start, begun) in lines.into_iter().rev() {
+        fuse.burn()?;
+        // Where what was moved aside lies, for a step that moved something.
+        let moved = match &begun {
+            Begun::MovedAside { step, place } => Some((dirs.aside().join(step).join(place), place)),
+            Begun::BackedUp { slot, place } => Some((dirs.backup().join(slot), place)),
+            Begun::PlacedNew { .. } | Begun::MadeDir { .. } => None,
+        };
+        match (&begun, moved) {
+            // The line may have been written without the move having happened. A link that
+            // was moved aside is there even if what it leads to is not.
+            (_, Some((kept, place))) if fs::symlink_metadata(&kept).is_ok() => {
+                let target = dirs.install.join(place);
                 guard_inside(dirs, &target)?;
-                unplace(&target, &dirs.staged().join(&relative))?;
+                unplace(&target, &dirs.staged().join(place))?;
+                fuse.burn()?;
+                when_free(|| fs::rename(&kept, &target)).map_err(|e| Error::file("restore", &target, e))?;
             }
-            (Some(MADE_DIR), Some(name), None) => {
+            (Begun::PlacedNew { place }, _) => {
+                let target = dirs.install.join(place);
+                guard_inside(dirs, &target)?;
+                unplace(&target, &dirs.staged().join(place))?;
+            }
+            (Begun::MadeDir { place }, _) => {
                 // Only removes the folder if it is empty again, which it is when everything
                 // placed inside it has been undone.
-                let dir = dirs.install.join(plan::relative_path(name)?);
+                let dir = dirs.install.join(place);
                 guard_inside(dirs, &dir)?;
                 let _ = fs::remove_dir(dir);
             }
-            _ => return Err(Error::corrupt(format!("unreadable line in the apply journal: {line}"))),
+            _ => {}
         }
+        fuse.burn()?;
+        // This also cuts off a last line that was never finished.
         shorten(start)?;
-        end = start;
     }
 
+    fuse.burn()?;
     when_free(|| fs::remove_file(&journal_path)).map_err(|e| Error::file("remove", &journal_path, e))?;
     let _ = fs::remove_dir_all(dirs.backup());
+    // What is left of the steps are the folders they were kept in. Anything more than
+    // that is a file the journal did not know of, which is not thrown away.
+    if !restore::holds_files(&dirs.aside()) {
+        let _ = fs::remove_dir_all(dirs.aside());
+    }
     Ok(())
 }
 

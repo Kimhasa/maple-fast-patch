@@ -24,6 +24,14 @@ static GO: AtomicBool = AtomicBool::new(false);
 /// The stand-in for a game's programs, as cargo built it for these tests.
 const LAUNCHER: &str = env!("CARGO_BIN_EXE_fake_launcher");
 
+/// Held by a test while it has a stand-in running, and by every run of a patch.
+///
+/// A run refuses a folder while its client's programs are running. A program that is just
+/// starting or ending does not say where it lives, and is then known by its name alone, in
+/// whichever folder it is. The tests run side by side: without this, a stand-in that one
+/// test starts would now and then stop the patch run of another.
+static STAND_INS: Mutex<()> = Mutex::new(());
+
 /// The moment the worlds of these tests are made at: 2026-11-26 13:05 in Korea.
 const NOW: Minutes = 20_783 * 1440 + 13 * 60 + 5;
 
@@ -44,6 +52,7 @@ fn apply(folder_of: &World, install: &Path, from: &Path, patch: &Patch) -> Resul
         immediate: false,
         storage: Default::default(),
     };
+    let _no_stand_in_runs = STAND_INS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     run_for(&programs(folder_of.client()), &options, &GO, &mut |_| {})
 }
 
@@ -408,6 +417,7 @@ fn maintenance_that_runs_past_midnight_is_told_with_the_day_it_began() {
 
 #[test]
 fn stand_in_for_the_game_writes_down_that_it_was_started() {
+    let _no_patch_runs = STAND_INS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let world = make(dir.path(), Server::Test, 2);
     let install = fake_world::install_dir(dir.path());

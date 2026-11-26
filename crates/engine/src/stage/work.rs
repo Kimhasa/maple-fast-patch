@@ -10,6 +10,9 @@ use crate::container::PatchFile;
 use crate::error::{Error, Result};
 use crate::preflight::{DOWNLOAD_DIR_NAME, LOCK_FILE_NAME, Problem, WORK_DIR_NAME};
 
+/// The folder in the work folder that holds what an apply has moved aside. See [`Dirs::aside`].
+const ASIDE_DIR_NAME: &str = "aside";
+
 /// Files being written are named `building-<entry number>.tmp` until they are complete.
 const BUILDING_PREFIX: &str = "building";
 const BUILDING_SUFFIX: &str = ".tmp";
@@ -32,9 +35,24 @@ impl Dirs {
     pub fn staged(&self) -> PathBuf {
         self.work().join("new")
     }
-    /// Original files moved aside while new ones take their place.
+    /// What an apply has moved out of the install folder while new files take its place,
+    /// each under the name it had there: `aside\<step>\<name>`, the steps numbered in the
+    /// order they were made. What lies here says by itself where it belongs, so an apply
+    /// that was cut off can be undone from it alone when its journal cannot be read.
+    pub fn aside(&self) -> PathBuf {
+        self.work().join(ASIDE_DIR_NAME)
+    }
+    /// Where applies of earlier versions moved originals to: numbered files and folders
+    /// that carry no names, which only their journal can put back. Nothing is moved here
+    /// any more.
     pub fn backup(&self) -> PathBuf {
         self.work().join("backup")
+    }
+    /// What an attempt to put the folder back without its journal leaves behind when it
+    /// finds that it cannot be done: the reason. It spares every later look the reading
+    /// that it took to find out.
+    pub(crate) fn cannot_restore(&self) -> PathBuf {
+        self.work().join("cannot-restore")
     }
     /// Where the app keeps the patch files it downloads: on the drive the game is on, which
     /// has to have the room for a patch anyway. They are not work of a run. They stay when
@@ -106,6 +124,14 @@ pub(crate) fn staged_is_ours(patch: &PatchFile, dirs: &Dirs) -> bool {
     }
 }
 
+/// The id of the patch that the work folder was made for: the one a half-patched install
+/// folder is pinned to, or else the one the staged files were built from. `None` where
+/// neither is on record.
+pub(crate) fn made_for(dirs: &Dirs) -> Option<String> {
+    let known = half_patched(dirs).or_else(|| fs::read_to_string(dirs.patch_id()).ok());
+    known.filter(|id| !id.is_empty())
+}
+
 /// The id of the patch that has left the install folder half patched, if one has: new files
 /// were moved into place while others were still to be built (see `pin`), and that run
 /// has not finished. Only that patch can finish it.
@@ -159,16 +185,13 @@ fn clear_work(work: &Path) -> Result<()> {
         // Not a folder the engine made: something else of that name.
         return remove_work(work);
     };
+    // What a finished apply had moved aside goes before anything else, see `remove_work`.
+    remove(&work.join(ASIDE_DIR_NAME))?;
     for child in children.flatten() {
         if child.file_name().eq_ignore_ascii_case(DOWNLOAD_DIR_NAME) {
             continue;
         }
-        let path = child.path();
-        let removed = if path.is_dir() { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };
-        match removed {
-            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(Error::file("remove", &path, e)),
-            _ => {}
-        }
+        remove(&child.path())?;
     }
     // Fails while the downloads are in it, which is as it should be.
     let _ = fs::remove_dir(work);
@@ -178,7 +201,7 @@ fn clear_work(work: &Path) -> Result<()> {
 /// Deletes the files an earlier run was writing when it was cut off. A file only counts as
 /// built once it has moved to the staged files, so these are never complete. Only one run
 /// works on an install folder at a time, which makes any such file a leftover.
-pub(super) fn remove_unfinished(dirs: &Dirs) {
+pub(crate) fn remove_unfinished(dirs: &Dirs) {
     let Ok(children) = fs::read_dir(dirs.work()) else { return };
     for child in children.flatten() {
         let name = child.file_name();
@@ -192,11 +215,30 @@ pub(super) fn remove_unfinished(dirs: &Dirs) {
     }
 }
 
-/// Removes the work folder, whether it is a folder or something else of that name.
+/// Removes the work folder, whether it is a folder or something else of that name. A link
+/// of that name is removed as the link it is, and what it leads to is left alone.
+///
+/// What an apply had moved aside goes first. If the removing stops halfway, what is left
+/// must not be that with the mark of a finished apply gone from beside it: it would read as
+/// an apply that was cut off, and be put back over the new files.
 pub(crate) fn remove_work(work: &Path) -> Result<()> {
-    let removed = if work.is_dir() { fs::remove_dir_all(work) } else { fs::remove_file(work) };
+    if fs::symlink_metadata(work).is_ok_and(|meta| meta.is_dir()) {
+        remove(&work.join(ASIDE_DIR_NAME))?;
+    }
+    remove(work)
+}
+
+/// Removes whatever is at `path`: a file, a folder with all that is in it, or a link, which
+/// goes as the link it is. Nothing being there is no failure.
+pub(crate) fn remove(path: &Path) -> Result<()> {
+    let removed = match fs::symlink_metadata(path) {
+        // A link to a folder goes the way a folder does, and one to a file the way a file does.
+        Ok(meta) if meta.file_type().is_symlink() => fs::remove_dir(path).or_else(|_| fs::remove_file(path)),
+        Ok(meta) if meta.is_dir() => fs::remove_dir_all(path),
+        _ => fs::remove_file(path),
+    };
     match removed {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(Error::file("remove", work, e)),
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(Error::file("remove", path, e)),
         _ => Ok(()),
     }
 }

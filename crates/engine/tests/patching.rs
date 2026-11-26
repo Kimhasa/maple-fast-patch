@@ -409,7 +409,7 @@ fn run_restores_an_install_whose_executable_was_moved_aside() {
     fs::write(dirs.work().join("applying.log"), "B\t0\tMapleStory.exe\n").unwrap();
 
     let mut restored = false;
-    run(&options(&fx), &GO, &mut |event| restored |= matches!(event, Event::Restored)).unwrap();
+    run(&options(&fx), &GO, &mut |event| restored |= matches!(event, Event::Restored(Leftover::RolledBack))).unwrap();
     assert!(restored);
     assert_eq!(fs::read(fx.install.join("MapleStory.exe")).unwrap(), b"exe");
     assert_patched(&fx, Layout::Table);
@@ -871,8 +871,8 @@ fn folder_with_an_apply_that_was_cut_off_is_restored_before_it_is_judged() {
     // not say whose folder it is: the program could be among what the apply had moved. So
     // the apply is undone first, and then the folder is refused for what it is.
     let mut restored = false;
-    let err =
-        run_for(&LIVE, &world.options(), &GO, &mut |event| restored |= matches!(event, Event::Restored)).unwrap_err();
+    let err = run_for(&LIVE, &world.options(), &GO, &mut |event| restored |= matches!(event, Event::Restored(_)))
+        .unwrap_err();
     let expected = [Problem::NotAnInstallDir { dir: world.install.clone(), missing: LIVE.game }];
     assert!(matches!(&err, Error::Blocked(problems) if problems[..] == expected), "unexpected error: {err}");
     assert!(restored, "the apply that was cut off was not undone");

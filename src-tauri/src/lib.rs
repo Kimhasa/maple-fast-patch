@@ -1,6 +1,8 @@
 //! The backend of the app: the commands the page calls, and what runs by itself while the
 //! window is open. This file starts it all; the modules do the work.
 
+mod address;
+mod clock;
 mod desk;
 mod flow;
 mod game;
@@ -28,12 +30,14 @@ mod wording;
 use tauri::Manager;
 
 use desk::open_desks;
-use flow::{OnClose, on_close};
+use flow::OnClose;
 use log::{keep_log_in, log_line, speak_up_on_failure};
 use maintenance::watch_maintenance;
 use state::Patcher;
 use update::watch_updates;
-use window::{Fitted, ask_for_webview, bring_back, fit_when_at_rest, fit_window, show_at_the_latest, show_tray};
+use window::{
+    Fitted, ask_for_webview, bring_back, closed, open_window, settle_tray, settle_when_at_rest, show_at_the_latest,
+};
 
 pub fn run() {
     speak_up_on_failure();
@@ -79,15 +83,15 @@ pub fn run() {
                     log_line(&format!("{}: {told}", site.client.server.key()));
                 }
             }
-            let background = patcher.settings.lock().unwrap().background;
             // The window is there by now. Nothing it asks for is answered before this
             // returns, so what answers it is in place in time.
             app.manage(patcher);
-            // A screen that is smaller than the window gets a smaller window.
-            fit_window(&handle, true);
+            // The window opens at the size it was left at, and a screen that is smaller
+            // than the window gets a smaller window.
+            open_window(&handle);
             // The window is made hidden, and shows when its page has drawn; see `window`.
             show_at_the_latest(&handle);
-            show_tray(&handle, background);
+            settle_tray(&handle);
             // From here on the app looks after the game by itself, whatever becomes of the
             // window.
             open_desks(&handle);
@@ -95,27 +99,36 @@ pub fn run() {
             watch_maintenance(&handle);
             Ok(())
         })
-        // Closing the window during a run would cut it off. The run is asked to stop first
+        // Closing the window during a run would cut it off. The user is asked whether the
+        // run is to go on without the window; a run that is to stop is asked to stop first
         // (an apply that has begun is finished), and the app exits when it has.
         .on_window_event(|window, event| {
-            // The window may have landed on another screen, or its screen has another scale.
-            if matches!(event, tauri::WindowEvent::Moved(_) | tauri::WindowEvent::ScaleFactorChanged { .. }) {
-                fit_when_at_rest(window.app_handle());
+            use tauri::WindowEvent::{Moved, Resized, ScaleFactorChanged};
+            // The window may have landed on another screen, or its screen has another scale,
+            // or the user has given it another size.
+            if matches!(event, Moved(_) | Resized(_) | ScaleFactorChanged { .. }) {
+                settle_when_at_rest(window.app_handle());
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let patcher = window.state::<Patcher>();
-                let background = patcher.settings.lock().unwrap().background;
-                match on_close(background, patcher.running().is_some()) {
+                let app = window.app_handle();
+                match closed(app) {
                     // With the icon next to the clock, closing the window puts it away and
                     // nothing stops.
                     OnClose::Hide => {
                         api.prevent_close();
                         let _ = window.hide();
                     }
+                    // The question is on the page. A window that was closed from the taskbar
+                    // while it was made small comes up with it.
+                    OnClose::Ask => {
+                        api.prevent_close();
+                        let _ = window.unminimize();
+                        let _ = window.set_focus();
+                    }
                     // A run that has ended in this very moment is not waited for: the window
                     // closes.
                     OnClose::StopThenLeave => {
-                        if patching::stop(window.app_handle(), &patcher, true) {
+                        if patching::stop(app, &app.state::<Patcher>(), true) {
                             api.prevent_close();
                         }
                     }
@@ -128,16 +141,19 @@ pub fn run() {
             desk::check_again,
             desk::dismiss_run,
             patching::start_patch,
+            patching::start_patch_at,
+            patching::confirm_patch_address,
             patching::stop_patch,
-            ready::set_install_dir,
+            ready::pick_install_dir,
+            ready::reset_install_dir,
             ready::discard_leftovers,
-            patching::foreign_origin,
             game::launch_game,
             game::open_download_page,
             settings::set_settings,
             measure::run_report,
             update::open_release_page,
-            window::page_drawn
+            window::page_drawn,
+            window::answer_close
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

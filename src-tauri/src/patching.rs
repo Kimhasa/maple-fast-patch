@@ -5,64 +5,145 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use mfp_engine::container::PatchFile;
+use mfp_engine::apply::Leftover;
 use mfp_engine::{Error, Event, Options, Outcome, Source, Stage, download, preflight, stage};
 use tauri::window::{ProgressBarState, ProgressBarStatus};
 use tauri::{AppHandle, Manager, State};
 
+use crate::address::{NotTaken, Taken, file_at, take};
 use crate::desk::{look_now, outside, run_said, tell_app, update};
 use crate::flow::{Flow, Patch, Progress, Refusal, RefusalKind, RunEnd, pick};
 use crate::log::{open_log, write_line};
-use crate::measure::{Measure, STEPS, Storage, drive_size, file_label, report_text};
-use crate::offer::{adopt_checked, version_after};
+use crate::measure::{Measure, STEPS, Storage, drive_size, report_text};
+use crate::offer::{Published, adopt_checked, checks_its_folder, given_checks_its_folder, starts_from};
+use crate::ready::{forget_what_was_known, work_left};
 use crate::records::{
-    Left, forget_left_run, install_dir, installed_version, left_run, record_minor, record_run_target, record_version,
-    records, write_whole,
+    Left, forget_left_run, install_mark, left_run, patch_at, record_minor, record_run_target, record_version, records,
+    write_whole,
 };
 use crate::state::{Patcher, Site, Target};
 use crate::window::notify;
-use crate::wording::{describe_error, describe_run_error, turned_down};
+use crate::wording::{asks_about_address, describe_error, describe_run_error, turned_down};
 
-/// Where a file the user picked was downloaded from, when Windows recorded that and it was
-/// not Nexon. `None` for a file from Nexon, and for one whose origin was never recorded
-/// (made on this PC, or copied here).
-///
-/// A patch file decides what the game's programs become, and nothing in it proves who made
-/// it. One that came from somewhere else is worth a question before it is applied.
-#[tauri::command]
-pub(crate) fn foreign_origin(file: String) -> Option<String> {
-    // Browsers note the origin of a download in a second stream of the file.
-    let note = std::fs::read_to_string(format!("{file}:Zone.Identifier")).ok()?;
-    let value = |key: &str| note.lines().find_map(|line| line.trim().strip_prefix(key)).map(str::trim);
-    // Zones 3 and 4 are the internet and restricted sites.
-    if value("ZoneId=").and_then(|zone| zone.parse::<u32>().ok()).is_none_or(|zone| zone < 3) {
-        return None;
+/// What a run is asked to be of.
+pub(crate) enum Wanted {
+    /// What the screen offers: the run that stopped or was left unfinished, and otherwise
+    /// the patch a check found; see [`pick`].
+    Offered,
+    /// The patch at the address the user gave. `agreed` says that they were asked about an
+    /// address the app cannot vouch for, and said yes to this one.
+    At { address: String, agreed: bool },
+}
+
+/// The patch a run fetches and applies.
+struct Fetch {
+    url: String,
+    /// What its file is kept as in the install folder while a run is at it.
+    file_name: String,
+    size: u64,
+    /// What it is called in the log and in the measurement: the version a patch the app
+    /// found leads to, and the name of the file at an address the user gave.
+    label: String,
+    /// The patch as a check describes it, when it is one of the client's own. Where it
+    /// leads is then known, and is written down once it has been applied.
+    known: Option<Target>,
+    /// The user gave its address. Any other patch is one a check found.
+    given: bool,
+}
+
+impl Fetch {
+    /// The patch a check found.
+    fn found(target: &Target) -> Fetch {
+        Fetch {
+            url: target.url.clone(),
+            file_name: target.file_name.clone(),
+            size: target.size,
+            label: target.label.clone(),
+            known: Some(target.clone()),
+            given: false,
+        }
     }
-    let host = value("HostUrl=")
-        .and_then(|url| url.split_once("://"))
-        .map(|(_, rest)| rest.split(['/', ':', '?']).next().unwrap_or_default().to_ascii_lowercase())
-        .filter(|host| !host.is_empty());
-    let from_nexon = |host: &str| {
-        ["nexoncdn.co.kr", "nexon.com"].iter().any(|own| host == *own || host.ends_with(&format!(".{own}")))
-    };
-    match host {
-        Some(host) if from_nexon(&host) => None,
-        Some(host) => Some(host),
-        None => Some(String::new()),
+
+    /// The patch at `url`, an address the user gave, of which the server says that it is
+    /// `size` bytes long.
+    fn given(site: &Site, url: &str, size: u64) -> Fetch {
+        match patch_at(site, url, size) {
+            Some(target) => Fetch { label: file_at(url).to_owned(), given: true, ..Fetch::found(&target) },
+            None => {
+                let name = file_at(url).to_owned();
+                Fetch { url: url.to_owned(), file_name: name.clone(), size, label: name, known: None, given: true }
+            }
+        }
+    }
+
+    /// What a run of this patch goes by when it is taken up again: the address the user
+    /// gave, or the name the file of a patch the app found is kept under.
+    fn id(&self) -> &str {
+        if self.given { &self.url } else { &self.file_name }
     }
 }
 
-/// Starts a patch run for the client the page calls `server`: of the patch file at `file`
-/// when the user picked one, and otherwise of what the screen offers; see [`pick`].
+fn site_named<'a>(patcher: &'a Patcher, server: &str) -> Result<&'a Site, Refusal> {
+    patcher.site_named(server).ok_or_else(|| Refusal::new(RefusalKind::Nothing, "설치 경로를 찾을 수 없습니다."))
+}
+
+/// Starts a patch run of what the screen offers for the client the page calls `server`; see
+/// [`pick`].
 #[tauri::command(async)]
-pub(crate) fn start_patch(
+pub(crate) fn start_patch(app: AppHandle, patcher: State<Patcher>, server: String) -> Result<(), Refusal> {
+    begin(&app, &patcher, site_named(&patcher, &server)?, Wanted::Offered)
+}
+
+/// Starts a run of the patch at `address`, which the user gave, for the client the page
+/// calls `server`.
+///
+/// Whether a patch is fetched from that address is decided here and not on the page; see
+/// [`take`]. An address on a server of Nexon's that is not among the client's own patch
+/// files is not begun: the start is turned down as [`RefusalKind::Ask`], for the page to
+/// ask, and the address waits for [`confirm_patch_address`].
+#[tauri::command(async)]
+pub(crate) fn start_patch_at(
     app: AppHandle,
     patcher: State<Patcher>,
     server: String,
-    file: Option<String>,
+    address: String,
 ) -> Result<(), Refusal> {
-    let no_such = || Refusal::new(RefusalKind::Nothing, "설치 경로를 찾을 수 없습니다.");
-    begin(&app, &patcher, patcher.site_named(&server).ok_or_else(no_such)?, file)
+    let site = site_named(&patcher, &server)?;
+    // Whatever address was asked about before is no longer the one in question.
+    site.asked_about.lock().unwrap().take();
+    begin(&app, &patcher, site, Wanted::At { address, agreed: false })
+}
+
+/// Starts the run of the patch at the address the user was asked about, for the client the
+/// page calls `server`: they have said yes.
+///
+/// The yes is for the one address that was asked about, which the backend has kept, and
+/// is used up by this. Nothing the page says here names an address or stays said.
+#[tauri::command(async)]
+pub(crate) fn confirm_patch_address(app: AppHandle, patcher: State<Patcher>, server: String) -> Result<(), Refusal> {
+    let site = site_named(&patcher, &server)?;
+    let asked_about = site.asked_about.lock().unwrap().take();
+    let address = asked_about.ok_or_else(|| Refusal::new(RefusalKind::Nothing, "적용할 패치가 없습니다."))?;
+    begin(&app, &patcher, site, Wanted::At { address, agreed: true })
+}
+
+/// What `address` is taken for as an address of a patch for the client of `site`, or the
+/// sentence that says why it is not taken; see [`take`].
+fn taken(site: &Site, address: &str) -> Result<Taken, Refusal> {
+    take(address, &site.patch_files()).map_err(|why| {
+        let sentence = match why {
+            NotTaken::NotAnAddress => "패치 주소가 아닙니다.",
+            NotTaken::NotNexons => "넥슨 패치 서버 주소가 아닙니다.",
+        };
+        Refusal::new(RefusalKind::Address, sentence)
+    })
+}
+
+/// Whether a patch at `address` is fetched in a way nobody on the line can change. A build
+/// made for trying the app out (`trying_out`) also fetches from a made-up server on this PC,
+/// which speaks plain HTTP.
+fn fetched_safely(address: &str, trying_out: bool) -> bool {
+    trying_out || address.starts_with("https://")
 }
 
 /// Begins a run in the folder of `site`: for the user who asked for one, or for the app
@@ -70,39 +151,79 @@ pub(crate) fn start_patch(
 ///
 /// The folder is looked at first. What the desk last saw may be a few seconds old, and a
 /// run must not begin by that.
-pub(crate) fn begin(app: &AppHandle, patcher: &Patcher, site: &Site, file: Option<String>) -> Result<(), Refusal> {
+pub(crate) fn begin(app: &AppHandle, patcher: &Patcher, site: &Site, wanted: Wanted) -> Result<(), Refusal> {
     if patcher.running().is_some() {
         return Err(Refusal::busy());
     }
-    look_now(app, patcher, site);
-    let picked = {
+    // An address is known from here on in the one spelling it is asked for in.
+    let (address, agreed) = match &wanted {
+        Wanted::At { address, agreed } => (Some(taken(site, address)?.url), *agreed),
+        Wanted::Offered => (None, false),
+    };
+    // A folder that is still being put back after an apply that was cut off is at work:
+    // nothing begins in it until it is back, and the footer says what is waited for.
+    if look_now(app, patcher, site).putting_back {
+        return Err(Refusal::busy());
+    }
+    let no_folder = || Refusal::new(RefusalKind::Nothing, "설치 경로를 찾을 수 없습니다.");
+    // The patch and the folder it is for are taken from the same look, in one breath. A
+    // folder that is changed in this very moment is not given the patch of the one before.
+    let (picked, folder, continued) = {
         let world = outside(patcher, site).world;
         let flow = site.flow.lock().unwrap();
-        pick(&flow.facts(&world), file.as_deref(), flow.left())?
+        let facts = flow.facts(&world);
+        let picked = pick(&facts, address.as_deref(), flow.left())?;
+        let folder = flow.status.as_ref().and_then(|status| status.install_dir.clone()).ok_or_else(no_folder)?;
+        let continued = picked.address().is_some_and(|address| facts.continues(address));
+        (picked, folder, continued)
     };
-    let no_folder = || Refusal::new(RefusalKind::Nothing, "설치 경로를 찾을 수 없습니다.");
-    let (install_dir, place) = install_dir(site).zip(patcher.place(site)).ok_or_else(no_folder)?;
-    let source = match &picked.patch {
-        Patch::File(file) => {
-            // A file that is no patch file is turned down here, before a run begins.
-            let file = PathBuf::from(file);
-            PatchFile::open(&file).map_err(|err| {
+    let (install_dir, place) = (PathBuf::from(&folder), patcher.place(site).ok_or_else(no_folder)?);
+    let fetch = match &picked.patch {
+        Patch::Given(address) => {
+            // The rule is held against every address a run is begun of, also one that is
+            // gone on with: what a run left on record of itself is a file like any other.
+            let taken = taken(site, address)?;
+            // Nexon's, and not among this client's own patch files: the user is asked
+            // first. A run that is gone on with was begun with that settled.
+            if !(taken.own || agreed || continued) {
+                *site.asked_about.lock().unwrap() = Some(taken.url);
+                return Err(Refusal::new(RefusalKind::Ask, &asks_about_address(site.client.title)));
+            }
+            // The server is asked whether the file is there, and how large it is.
+            let there = download::probe(&taken.url).map_err(|err| {
                 let (message, details) = describe_error(site.client.title, &err);
-                Refusal { kind: RefusalKind::NotPatch, messages: std::iter::once(message).chain(details).collect() }
+                Refusal { kind: RefusalKind::Address, messages: std::iter::once(message).chain(details).collect() }
             })?;
-            Source::File(file)
+            Fetch::given(site, &taken.url, there.len)
         }
         Patch::Server(target) => {
-            // The patch file is kept in the install folder. The game's drive has to have
-            // room for the new game files anyway; the system drive may have none to spare.
-            let dest = stage::Dirs::new(&install_dir).download().join(&target.file_name);
-            Source::Url { url: target.url.clone(), dest }
+            let unchanged = || {
+                let found = site.found_for(&install_dir).filter(|found| found.target.as_ref() == Some(target));
+                found.is_some_and(|found| found.mark == install_mark(site, &install_dir))
+            };
+            // The patch was found for the folder as its files were at the last check, and
+            // so was what proves which version the folder is at. Files that have changed
+            // since are another folder to ask about: the server is asked first. A folder
+            // that a run left partly new is not what any check found it as, and takes the
+            // one patch that is on record for it.
+            if !mfp_engine::run::half_patched(&install_dir) && !unchanged() {
+                site.log("not starting: the folder is not as the last check found it. asking again");
+                site.forget_found();
+                update(app, patcher, site, |flow| flow.ask_again(Instant::now()));
+                return Err(Refusal::busy());
+            }
+            if !fetched_safely(&target.url, cfg!(debug_assertions)) {
+                return Err(Refusal::new(RefusalKind::Nothing, "적용할 패치가 없습니다."));
+            }
+            Fetch::found(target)
         }
     };
     // The one turn there is for a run is taken in the same breath as the run takes the
     // screen: a site's run is at work exactly while its phase says so.
     let begun = update(app, patcher, site, |flow| {
-        let free = patcher.begin_run(site);
+        // Not for a folder the site has left in the meantime.
+        let here = flow.status.as_ref().is_some_and(|status| status.install_dir.as_deref() == Some(folder.as_str()));
+        let free = here && patcher.begin_run(site);
         if free {
             patcher.stop.store(false, Ordering::SeqCst);
             // A check still at work gives up, so the run does not have to wait for it. So
@@ -117,13 +238,13 @@ pub(crate) fn begin(app: &AppHandle, patcher: &Patcher, site: &Site, file: Optio
     }
     tell_app(app, patcher);
 
-    let (app, target) = (app.clone(), picked.target().cloned());
-    std::thread::spawn(move || run(&app, place, install_dir, source, target));
+    let app = app.clone();
+    std::thread::spawn(move || run(&app, place, install_dir, fetch));
     Ok(())
 }
 
 /// A run, from its turn at the folder to its end. The site it is of is the one at `place`.
-fn run(app: &AppHandle, place: usize, install_dir: PathBuf, source: Source, target: Option<Target>) {
+fn run(app: &AppHandle, place: usize, install_dir: PathBuf, fetch: Fetch) {
     let patcher = app.state::<Patcher>();
     let site = &patcher.sites[place];
     let stop = patcher.stop.clone();
@@ -133,25 +254,18 @@ fn run(app: &AppHandle, place: usize, install_dir: PathBuf, source: Source, targ
     let awake = StayAwake::start();
 
     let wishes = *patcher.settings.lock().unwrap();
+    // The patch file is kept in the install folder. The game's drive has to have room for
+    // the new game files anyway; the system drive may have none to spare.
+    let dest = stage::Dirs::new(&install_dir).download().join(&fetch.file_name);
+    let source = Source::Url { url: fetch.url.clone(), dest: dest.clone() };
     let options = Options { install_dir, source, immediate: wishes.immediate, storage: wishes.storage.choice() };
     let mut reporter = Reporter::new(app.clone(), place);
-    reporter.download_to = match &options.source {
-        Source::Url { dest, .. } => Some(dest.clone()),
-        Source::File(_) => None,
-    };
-    reporter.patch = match &options.source {
-        Source::File(path) => path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
-        Source::Url { url, .. } => url.rsplit('/').next().unwrap_or_default().to_owned(),
-    };
+    reporter.download_to = Some(dest.clone());
+    reporter.patch = file_at(&fetch.url).to_owned();
     // A run of this same patch that was left unfinished is carried on: the bar starts
     // where it had come to and the time already spent counts, also after the app was
     // closed in between.
-    let id = match &options.source {
-        Source::File(path) => path.display().to_string(),
-        Source::Url { dest, .. } => {
-            dest.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
-        }
-    };
+    let id = fetch.id().to_owned();
     // Whatever that run left, the patch file it downloaded included, is in the work
     // folder.
     let work = options.install_dir.join(preflight::WORK_DIR_NAME).is_dir();
@@ -176,18 +290,11 @@ fn run(app: &AppHandle, place: usize, install_dir: PathBuf, source: Source, targ
     reporter.measure = match measured.filter(|kept| kept.id == id && kept.install == options.install_dir) {
         Some(kept) => kept,
         None => {
-            let (label, size) = match (&options.source, &target) {
-                (Source::File(path), _) => {
-                    (file_label(site.client, path), std::fs::metadata(path).map_or(0, |meta| meta.len()))
-                }
-                (_, Some(target)) => (target.label.clone(), target.size),
-                _ => (String::new(), 0),
-            };
             let mut measure = Measure {
                 id: id.clone(),
                 install: options.install_dir.clone(),
-                label,
-                size,
+                label: fetch.label.clone(),
+                size: fetch.size,
                 space: drive_size(&options.install_dir).zip(preflight::free_space(&options.install_dir).ok()),
                 ..Measure::default()
             };
@@ -199,23 +306,47 @@ fn run(app: &AppHandle, place: usize, install_dir: PathBuf, source: Source, targ
     };
     reporter.tried = half_patched;
     if !half_patched {
-        record_run_target(site, &options.install_dir, &options.source, target.as_ref());
+        record_run_target(site, &options.install_dir, fetch.known.as_ref().filter(|_| !fetch.given), &fetch.url);
     }
     if keeps_records {
         reporter.record = records(site, &options.install_dir).ok().map(|dir| (dir.join("run-left"), id));
     }
-    let what = match (&options.source, &target) {
-        (Source::File(path), _) => format!("file {}", path.display()),
-        (_, Some(target)) => format!("{} from {}", target.label, target.url),
-        _ => String::new(),
-    };
-    reporter.log(&format!("start {what} in {}", options.install_dir.display()));
-    if let Source::Url { dest, .. } = &options.source
-        && adopt_checked(site, dest)
-    {
+    reporter.log(&format!("start {} from {} in {}", fetch.label, fetch.url, options.install_dir.display()));
+    if adopt_checked(site, &dest) {
         reporter.log("the patch file is the one the check had downloaded");
     }
-    let result = mfp_engine::run_for(&site.programs(), &options, &stop, &mut |event| reporter.handle(event));
+    // A patch is only applied to a folder there is something to hold it against: the files
+    // it names as what it starts from, or what is known of the folder's version. Whether
+    // there is, is asked of the server where it is not known already; see
+    // [`checks_its_folder`]. A folder that a run left partly new takes the rest of the patch
+    // that run was begun with, and nothing is asked.
+    let shelf = Published::of(site);
+    let checks = match &fetch.known {
+        _ if half_patched => Ok(true),
+        Some(target) if !fetch.given => checks_its_folder(site, &options.install_dir, target, &shelf),
+        known => {
+            let from = known.as_ref().and_then(starts_from);
+            given_checks_its_folder(site, &options.install_dir, &fetch.url, from, &shelf)
+        }
+    };
+    let result = match checks {
+        Ok(true) => mfp_engine::run_for(&site.programs(), &options, &stop, &mut |event| {
+            // The run found an apply cut off, and put the folder back without being able to
+            // vouch for it as the version before that patch. What the app had on record of
+            // the folder is forgotten before this run adds to it.
+            if matches!(event, Event::Restored(Leftover::PutBack)) {
+                forget_what_was_known(site, &options.install_dir);
+            }
+            reporter.handle(event)
+        }),
+        // Nothing was fetched and nothing changed. The game's own launcher still brings
+        // the game up to date, which is what a patch in a form this app does not take
+        // comes to as well.
+        Ok(false) => Err(Error::UnknownForm(
+            "it names no file it starts from, and nothing proves which version the folder is at".to_owned(),
+        )),
+        Err(err) => Err(err),
+    };
     reporter.time_step(None);
     let seconds = reporter.active().as_secs();
     // What the patch changed is counted over every run of it, as its time is.
@@ -245,26 +376,20 @@ fn run(app: &AppHandle, place: usize, install_dir: PathBuf, source: Source, targ
     // A run that was paused and left something to go on with keeps its figure on the
     // taskbar, marked as paused: what it built, or part of the patch file. That is what
     // the status calls a run that can be continued. Any other end takes the figure away.
-    let partial = matches!(&options.source, Source::Url { dest, .. } if download::part_path(dest).exists());
-    let unfinished = partial || !preflight::check_leftovers(&options.install_dir).is_empty();
+    let partial = download::part_path(&dest).exists();
+    let unfinished = partial || work_left(&options.install_dir);
     let rests = matches!(&result, Err(Error::Stopped)) && unfinished;
     taskbar_progress(app, rests.then(|| (ProgressBarStatus::Paused, reporter.percent())));
 
     let end = match result {
         Ok(outcome) => {
-            // Where the patch left the install is remembered.
-            let installed = installed_version(site, &options.install_dir);
-            let after = match (&options.source, &target) {
-                (Source::Url { .. }, Some(target)) => Some((target.version, target.minor)),
-                (Source::File(path), _) => {
-                    installed.and_then(|installed| version_after(path, installed)).map(|version| (version, None))
-                }
-                _ => None,
-            };
-            if let Some((version, minor)) = after {
-                record_version(site, &options.install_dir, version);
-                if let Some(minor) = minor {
-                    record_minor(site, &options.install_dir, version, minor);
+            // Where the patch left the install is remembered, when it is known where that
+            // is: for a patch the app found, and for one of the client's own that the user
+            // gave the address of.
+            if let Some(target) = &fetch.known {
+                record_version(site, &options.install_dir, target.version);
+                if let Some(minor) = target.minor {
+                    record_minor(site, &options.install_dir, target.version, minor);
                 }
             }
             // The install changed; work out afresh what it can take next.
@@ -633,7 +758,7 @@ impl Reporter {
             // Found already built: it is being checked, not made.
             Event::Kept { name, bytes } => {
                 self.kept += bytes;
-                self.doing = Some(format!("검사중: {name}"));
+                self.doing = Some(format!("검사 중: {name}"));
                 false
             }
             Event::Placed { .. } => {
@@ -650,7 +775,7 @@ impl Reporter {
                 self.log(&format!("space needed {needed} bytes, available {available} bytes"));
                 false
             }
-            Event::Restored => {
+            Event::Restored(_) => {
                 self.log("restored the install folder after an interrupted apply");
                 false
             }
@@ -705,14 +830,14 @@ impl Reporter {
     }
 
     /// The activity line for `name` in the current step, worded the way the game's own
-    /// patcher words it: `생성중: Map001.wz`.
+    /// patcher words it: `생성 중: Map001.wz`.
     fn line(&self, name: &str) -> String {
         let doing = match self.step() {
-            Stage::Download => "다운로드중",
-            Stage::VerifyPatch | Stage::VerifyInstall => "검사중",
-            Stage::Trial => "확인중",
-            Stage::Rebuild => "생성중",
-            Stage::Apply => "반영중",
+            Stage::Download => "다운로드 중",
+            Stage::VerifyPatch | Stage::VerifyInstall => "검사 중",
+            Stage::Trial => "확인 중",
+            Stage::Rebuild => "생성 중",
+            Stage::Apply => "반영 중",
         };
         format!("{doing}: {name}")
     }
@@ -803,7 +928,8 @@ mod tests {
         ];
         assert_eq!(in_place(&paused), 0);
         // Nor does an apply that failed and was undone: the engine names none of its files.
-        let undone = [Event::Stage(Stage::Apply), begins("Base.wz"), begins("Map.wz"), Event::Restored];
+        let rolled_back = Event::Restored(mfp_engine::apply::Leftover::RolledBack);
+        let undone = [Event::Stage(Stage::Apply), begins("Base.wz"), begins("Map.wz"), rolled_back];
         assert_eq!(in_place(&undone), 0);
     }
 
@@ -943,5 +1069,109 @@ mod tests {
         // Within the same percent the record waits for the clock: only the time on it grows.
         assert!(!record_due(Some(69), 69.99, just_written));
         assert!(record_due(Some(69), 69.99, SAVE_EVERY));
+    }
+
+    fn live() -> Site {
+        Site::new(&mfp_kms::LIVE, PathBuf::from("data"), crate::harness::StandIns::default())
+    }
+
+    /// Whether an address is one a patch is fetched from is decided here, where the run is
+    /// begun, and the page is told in a sentence why one is not.
+    #[test]
+    fn an_address_that_is_not_taken_is_turned_down_with_the_sentence_for_it() {
+        let site = live();
+        let refused = |address: &str| {
+            let refusal = taken(&site, address).expect_err(address);
+            assert_eq!(refusal.kind, RefusalKind::Address, "{address:?}");
+            refusal.messages
+        };
+        assert_eq!(refused("https://example.com/Patch/00421/00420to00421.patch"), ["넥슨 패치 서버 주소가 아닙니다."]);
+        let no_address = [
+            "",
+            "00420to00421.patch",
+            "ftp://maplestory.dn.nexoncdn.co.kr/Patch/00421/00420to00421.patch",
+            "https://maplestory.dn.nexoncdn.co.kr/Patch/00421/00420to00421.exe",
+        ];
+        for address in no_address {
+            assert_eq!(refused(address), ["패치 주소가 아닙니다."], "{address:?}");
+        }
+
+        // One that is taken is known from then on in the one spelling it is asked for in.
+        let own = taken(&site, " HTTPS://MAPLESTORY.DN.NEXONCDN.CO.KR:443/Patch/00421/00420to00421.patch ").unwrap();
+        assert_eq!(own.url, "https://maplestory.dn.nexoncdn.co.kr/Patch/00421/00420to00421.patch");
+        assert!(own.own);
+        // One that is given with http, as the links that are handed round are, is that
+        // same address, and is what a run by it is on record under.
+        let handed_round = taken(&site, "http://maplestory.dn.nexoncdn.co.kr/Patch/00421/00420to00421.patch").unwrap();
+        assert_eq!(handed_round, own);
+        assert!(fetched_safely(&handed_round.url, false));
+        // The other client's patches are Nexon's, and not this client's own.
+        assert!(!taken(&site, &mfp_kms::TEST.patch_url(1207, 1208)).unwrap().own);
+
+        // A build for trying the app out takes the made-up server it is pointed at. A build
+        // that is given out is pointed at none, and takes no such address.
+        let made_up = "http://127.0.0.1:18421/Patch/00901/00900to00901.patch";
+        let trying_out = Site::new(&mfp_kms::LIVE, PathBuf::from("data"), crate::harness::StandIns::of_a_session());
+        assert!(taken(&trying_out, made_up).unwrap().own);
+        assert_eq!(refused(made_up), ["넥슨 패치 서버 주소가 아닙니다."]);
+    }
+
+    /// A patch the user gave the address of is called by the name of the file there. Where
+    /// it is one of the client's own, it is otherwise the same patch a check would have
+    /// found: kept under the same name, and written down as the version it leads to once
+    /// it is applied. Of any other, where it leads is not known.
+    #[test]
+    fn a_patch_given_by_its_address_is_known_as_a_check_knows_it_when_it_is_one_of_the_clients_own() {
+        let site = live();
+        let files = "https://maplestory.dn.nexoncdn.co.kr";
+        let main = Fetch::given(&site, &format!("{files}/Patch/00421/00420to00421.patch"), 1000);
+        assert_eq!(
+            (main.label.as_str(), main.file_name.as_str(), main.size),
+            ("00420to00421.patch", "00420to00421.patch", 1000)
+        );
+        assert_eq!(main.known.as_ref().map(|target| (target.version, target.minor)), Some((421, None)));
+        let minor = Fetch::given(&site, &format!("{files}/Patch/00421/Minor/03to04.patch"), 200);
+        assert_eq!((minor.label.as_str(), minor.file_name.as_str()), ("03to04.patch", "00421-minor-03to04.patch"));
+        assert_eq!(minor.known.as_ref().map(|target| (target.version, target.minor)), Some((421, Some(4))));
+
+        for elsewhere in ["/PatchT/01208/01207to01208.patch", "/Patch/00421/00420to00421-fix.patch", "/Patch/a.patch"] {
+            let other = Fetch::given(&site, &format!("{files}{elsewhere}"), 300);
+            let name = elsewhere.rsplit('/').next().unwrap();
+            assert_eq!((other.label.as_str(), other.file_name.as_str(), other.size), (name, name, 300), "{elsewhere}");
+            assert!(other.known.is_none() && other.given, "{elsewhere}");
+        }
+
+        // A run by address goes by the address when it is taken up again, and a run of a
+        // patch the app found by the name its file is kept under, as it always did.
+        assert!(main.given && main.id() == main.url);
+        let found = Fetch::found(main.known.as_ref().unwrap());
+        assert!(!found.given && found.id() == "00420to00421.patch");
+    }
+
+    #[test]
+    fn a_patch_is_fetched_over_https_and_nothing_else_except_by_a_build_for_trying_the_app_out() {
+        let given_out = false;
+        assert!(fetched_safely("https://maplestory.dn.nexoncdn.co.kr/Patch/00422/00421to00422.patch", given_out));
+        let others = [
+            "http://maplestory.dn.nexoncdn.co.kr/Patch/00422/00421to00422.patch",
+            "HTTP://maplestory.dn.nexoncdn.co.kr/Patch/00422/00421to00422.patch",
+            "ftp://maplestory.dn.nexoncdn.co.kr/Patch/00422/00421to00422.patch",
+            "file:///C:/patches/00421to00422.patch",
+            r"\\nas\patches\00421to00422.patch",
+            " https://maplestory.dn.nexoncdn.co.kr/Patch/00422/00421to00422.patch",
+            "",
+        ];
+        for address in others {
+            assert!(!fetched_safely(address, given_out), "{address:?}");
+        }
+        // A made-up server on this PC speaks plain HTTP, and only a build for trying the
+        // app out is ever pointed at one.
+        assert!(fetched_safely("http://127.0.0.1:18421/Patch/00901/00900to00901.patch", true));
+        // Where the clients' patches are published is fetched from in any build.
+        for server in mfp_kms::Server::ALL {
+            let client = server.client();
+            assert!(fetched_safely(&client.patch_url(1207, 1208), given_out));
+            assert!(fetched_safely(&client.minor_patch_url(1208, 1, 2), given_out));
+        }
     }
 }

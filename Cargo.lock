@@ -2271,6 +2271,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mfp-check"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "mfp-engine",
+ "mfp-kms",
+ "tempfile",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "mfp-engine"
 version = "0.1.0"
 dependencies = [

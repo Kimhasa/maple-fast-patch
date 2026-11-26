@@ -13,17 +13,26 @@
 //! yet are the only copy of what they hold, because originals they were built from have
 //! been replaced.
 //!
+//! This way is the player's choice, made before a patch is started. With the choice made,
+//! every run goes this way from its start, whatever room the drive has; without it, none
+//! does. With room for everything, all the new files are built in one round and then
+//! placed, and what is left of the difference to the safe way is that placing is not
+//! undone.
+//!
 //! A file that may not be placed ahead of its turn, because an earlier entry deletes the
 //! folder it goes into, waits among the staged files. It goes in at the end, with the
 //! deletes and the new folders, through the apply that keeps a journal and can be undone.
 //!
 //! Because there is no way back, what can be known beforehand is found out beforehand. The
 //! way is only begun on a drive where a file moved over another survives a power cut whole
-//! (see `storage::Volume::takes_immediate`), and before the first file is replaced every
-//! new file is built once and kept nowhere, so that a patch that cannot be built is found
-//! while the folder is still the old version. And once a folder is half patched, the patch
-//! file that began there is used from this PC for as long as it is there, whatever the
-//! server has under its address by then (see `run::run_on_disk`).
+//! (see `storage::Volume::takes_immediate`), and no file is replaced before every new file
+//! has been built once, so that a patch that cannot be built is found while the folder is
+//! still the old version. Where the drive has room for all the new files, they are built in
+//! one round before any of them is placed, and that round shows it. Where it has not, the
+//! files of one round are placed before those of the next are built, so a trial comes
+//! first: every new file is built once and kept nowhere. And once a folder is half patched,
+//! the patch file that began there is used from this PC for as long as it is there, whatever
+//! the server has under its address by then (see `run::run_on_disk`).
 
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
@@ -44,6 +53,9 @@ use crate::storage::Profile;
 /// Room the immediate way asks for at its start beyond the least it can work with. With
 /// exactly the least, every round would build a single file, and every round reads the patch
 /// file from its beginning again, which takes about 3 s for a real patch.
+///
+/// It is not asked for beyond the room for everything that is to be built: see
+/// [`room_to_start`].
 ///
 /// Public for tests, which work out from it how much room a run asks for.
 #[doc(hidden)]
@@ -127,6 +139,23 @@ pub fn space_needed(plan: &Plan, checked: &Checked, built: &BTreeSet<String>, in
     peak as u64
 }
 
+/// The room the immediate way asks the drive for before it builds anything: the least it
+/// can work with (see [`space_needed`]) and `slack` on top, but never more than the new files
+/// that are still to be built take all together. With room for all of them there is one
+/// round, and nothing left for the slack to spare. So this way never asks for more than
+/// the safe way does, however small the patch. `built` is as for [`space_needed`].
+pub(crate) fn room_to_start(
+    plan: &Plan,
+    checked: &Checked,
+    built: &BTreeSet<String>,
+    install: &Path,
+    slack: u64,
+) -> u64 {
+    let still_to_build = |entry: &&Entry| checked.builds(entry) && !built.contains(&entry.name);
+    let all: u64 = plan.entries.iter().filter(still_to_build).map(Entry::new_len).sum();
+    space_needed(plan, checked, built, install).saturating_add(slack).min(all)
+}
+
 /// Does on paper what a pass of placing does: every staged file that may be placed counts as
 /// placed. Returns the bytes of the originals that would be replaced.
 fn place_on_paper(order: &Order, checked: &mut Checked, staged: &mut BTreeSet<String>, install: &Path) -> i64 {
@@ -200,13 +229,13 @@ impl<'a> Order<'a> {
 /// See [`Order::waits`]. `keys` are the names of the entries in the form names are compared
 /// in.
 fn waits_for_delete(plan: &Plan, keys: &[String]) -> Vec<bool> {
-    let mut deleted: Vec<&str> = Vec::new();
+    let mut deleted: HashSet<&str> = HashSet::new();
     let mut waits = Vec::with_capacity(keys.len());
     for (entry, key) in plan.entries.iter().zip(keys) {
-        let below = |gone: &&str| key.strip_prefix(*gone).is_some_and(|rest| rest.is_empty() || rest.starts_with('\\'));
-        waits.push(deleted.iter().any(below));
+        let itself = std::iter::once(key.as_str());
+        waits.push(itself.chain(plan::folders_above(key)).any(|name| deleted.contains(name)));
         if entry.action == Action::Delete {
-            deleted.push(key);
+            deleted.insert(key);
         }
     }
     waits
@@ -214,7 +243,8 @@ fn waits_for_delete(plan: &Plan, keys: &[String]) -> Vec<bool> {
 
 /// Builds what is still to be built, a round at a time, and after each round moves into
 /// place every new file that may go there already. Announces the `Rebuild` step and reports
-/// its progress.
+/// its progress. Where there is more than one round, a trial of every file comes first, as
+/// a step of its own.
 ///
 /// `checked` is what the check of the originals found. `built` is the answer of
 /// [`built_before`], where the run has asked for it already. Returns `checked` with every
@@ -246,10 +276,18 @@ pub fn build_and_place(
     rounds.remove_stale();
     rounds.refuse_what_cannot_be_placed()?;
     rounds.require_space(on_event)?;
-    rounds.try_everything(on_event)?;
+    // Nothing is placed before every new file has been built once. One round of all of
+    // them does that by itself; rounds of some of them need the trial before them.
+    let everything = rounds.round_of_everything();
+    if everything.is_none() {
+        rounds.try_everything(on_event)?;
+    }
 
     on_event(Event::Stage(Stage::Rebuild));
     rounds.report_what_is_done(on_event);
+    if let Some(everything) = &everything {
+        rounds.build(everything, on_event)?;
+    }
     // Files an earlier run built may be free to go already, and each gives room back.
     rounds.place_ready(on_event)?;
     while let Some(round) = rounds.next_round()? {
@@ -293,27 +331,51 @@ impl Rounds<'_> {
     }
 
     /// Refuses, before anything is replaced, a patch with a file that could not be put in
-    /// its place: a folder stands there, or a file stands where one of its folders has to
-    /// be. The apply that can be undone finds such a thing as it goes. Here that would be
-    /// after other files were replaced for good.
+    /// its place, or a folder that could not be made: a folder stands where the file goes,
+    /// or a file stands where a folder has to be. The apply that can be undone finds such a
+    /// thing as it goes. Here that would be after other files were replaced for good.
     ///
-    /// Files that wait for a delete are not looked at. The delete may be what clears their
-    /// place, and they go in through the apply that can be undone.
+    /// What stands in the way does not count if an entry before it deletes it. A delete only
+    /// removes the kind of thing it names, a file or a folder, so one that names the other
+    /// kind clears nothing, though the entries behind it wait for it all the same.
     fn refuse_what_cannot_be_placed(&self) -> Result<()> {
         let in_the_way = |path: &Path, what: &'static str| {
             Error::file("replace", path, io::Error::new(io::ErrorKind::AlreadyExists, what))
         };
-        for (index, entry) in self.job.plan.entries.iter().enumerate() {
-            if !self.checked.builds(entry) || self.order.waits[index] {
+        // What the deletes so far take away, as name keys: files, and folders with
+        // everything in them.
+        let (mut files_gone, mut folders_gone) = (HashSet::new(), HashSet::new());
+        for (entry, key) in self.job.plan.entries.iter().zip(&self.order.keys) {
+            let target = self.job.dirs.install.join(plan::relative_path(&entry.name)?);
+            if entry.action == Action::Delete {
+                if stage::deletes(&entry.name, &target) {
+                    let gone = if plan::names_folder(&entry.name) { &mut folders_gone } else { &mut files_gone };
+                    gone.insert(key.as_str());
+                }
                 continue;
             }
-            let target = self.job.dirs.install.join(plan::relative_path(&entry.name)?);
-            if target.is_dir() {
-                return Err(in_the_way(target.as_path(), "a folder has this name"));
+            let folder = entry.action == Action::CreateDir;
+            if !(folder || self.checked.builds(entry)) {
+                continue;
             }
-            let above = target.ancestors().skip(1).find(|above| above.exists());
-            if let Some(above) = above.filter(|above| !above.is_dir()) {
-                return Err(in_the_way(above, "a file has the name of this folder"));
+            let with_folders_above = |name| std::iter::once(name).chain(plan::folders_above(name));
+            let goes_with_a_folder = |name| with_folders_above(name).any(|above| folders_gone.contains(above));
+            // Each place of the name with what it is called, nearest first.
+            let mut places = target.ancestors().zip(with_folders_above(key));
+            if !folder {
+                let (path, name) = places.next().expect("a name has at least one part");
+                if path.is_dir() && !goes_with_a_folder(name) {
+                    return Err(in_the_way(path, "a folder has this name"));
+                }
+            }
+            // The folders that have to be there: those above, and the entry's own if it
+            // makes one. The nearest thing that is there has to be a folder.
+            if let Some((path, name)) = places.find(|(path, _)| path.exists())
+                && !path.is_dir()
+                && !files_gone.contains(name)
+                && !goes_with_a_folder(name)
+            {
+                return Err(in_the_way(path, "a file has the name of this folder"));
             }
         }
         Ok(())
@@ -329,7 +391,7 @@ impl Rounds<'_> {
         // An install folder that is half patched already cannot turn back, and going on
         // slowly is better for it than not going on. It is asked for the least only.
         let slack = if stage::half_patched(dirs).is_some() { 0 } else { self.job.slack };
-        let bytes = space_needed(plan, &self.checked, &self.staged, &dirs.install).saturating_add(slack);
+        let bytes = room_to_start(plan, &self.checked, &self.staged, &dirs.install, slack);
         let work = dirs.work();
         if let Ok(available) = free(&work) {
             on_event(Event::Space { needed: bytes.saturating_add(SPACE_MARGIN), available });
@@ -337,13 +399,38 @@ impl Rounds<'_> {
         blocked_unless_empty(preflight::check_space_with(&[SpaceNeed { dir: work, bytes }], SPACE_MARGIN, free))
     }
 
+    /// Every file that is still to be built, as one round, where the drive has room for all
+    /// of them as it is now and the install folder is still whole. `None` where it has not,
+    /// where the folder is half patched, and where nothing is to be built.
+    ///
+    /// A run that builds this round before it places anything needs no trial: the round
+    /// finds what a trial would find, and finds it while the install folder is still the old
+    /// version. That holds for a run that goes on from an earlier one as well. The files
+    /// that one left built were checked against their checksums, and they wait for this
+    /// round like the rest.
+    ///
+    /// The drive is asked once, here, and the round is not cut down if the drive has less
+    /// by the time it is built. A build that runs out of room fails with nothing placed. A
+    /// smaller round would be placed before the files after it had ever been built.
+    fn round_of_everything(&self) -> Option<BTreeSet<String>> {
+        let Job { plan, dirs, free, .. } = self.job;
+        if stage::half_patched(dirs).is_some() {
+            return None;
+        }
+        let left: Vec<&Entry> = plan.entries.iter().filter(|entry| self.to_build(entry)).collect();
+        let bytes = left.iter().fold(0u64, |sum, entry| sum.saturating_add(entry.new_len()));
+        let room = free(&dirs.work()).ok()?.saturating_sub(SPACE_MARGIN);
+        (!left.is_empty() && bytes <= room).then(|| left.iter().map(|entry| entry.name.clone()).collect())
+    }
+
     /// Builds every file that is still to be built once, to nowhere, so that a patch that
     /// cannot be built is found while the install folder is still whole: an original that
-    /// cannot be read, a copy that reaches past the end of one, a new file that comes out
+    /// cannot be read or has got shorter since it was checked, a new file that comes out
     /// with another checksum than promised. The safe way finds these while it builds, before
-    /// it touches anything. Here the first files are in place by then, for good. Announces
-    /// the `Trial` step and reports its progress, which costs one more reading of the
-    /// originals and no room.
+    /// it touches anything, and so does a run that has [`Self::round_of_everything`]. In
+    /// rounds of some files at a time, the first files are in place by then, for good.
+    /// Announces the `Trial` step and reports its progress, which costs one more reading of
+    /// the originals and no room.
     ///
     /// An install folder that is half patched already is not tried. There is no way back
     /// from there whatever a trial says, and files of it that are built can no longer be
@@ -538,7 +625,7 @@ mod tests {
     }
 
     fn plan_of(entries: Vec<Entry>) -> Plan {
-        Plan { layout: Layout::Table, originals: BTreeMap::new(), entries, contents_len: 0 }
+        Plan { layout: Layout::Table, originals: BTreeMap::new(), entries, contents_len: 0, reach: BTreeMap::new() }
     }
 
     /// An install folder that holds files of the given sizes.

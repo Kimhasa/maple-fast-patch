@@ -9,24 +9,25 @@
 // state as it is at that moment, never a copy from an earlier render.
 
 import {
+  answerClose,
   askAgain,
   copyText,
   defaultSettings,
+  confirmPatchAddress,
   discardLeftovers,
   dismissRun,
-  foreignOrigin,
   launchGame,
   onSaid,
   onShown,
   openDownloadPage,
   openReleasePage,
   opensOn,
-  pickFolder,
-  pickPatchFile,
+  pickInstallDir,
+  resetInstallDir,
   runReport,
-  setInstallDir,
   setSettings,
   startPatch,
+  startPatchAt,
   stopPatch,
   takeSnapshot,
   type AppView,
@@ -51,9 +52,15 @@ export type State = {
   app: AppView;
   /** The page that is open. `null` until it is settled where the app opens. */
   page: Page | null;
-  dialog: "none" | "blocked" | "failed" | "ask";
+  /**
+   * The dialog that is open. The "closing" one is the backend's: it is open while a run
+   * says that the window was closed on it, and the backend is given the answer.
+   */
+  dialog: "none" | "blocked" | "failed" | "ask" | "address" | "closing";
   /** What the "ask" dialog asks, the line under it, and what a yes does. */
   question: { message: string; detail: string; yes: () => void } | null;
+  /** What the "address" dialog is for: whose patch, and what stands in its field. */
+  address: { server: ServerId; value: string } | null;
   /** What the "failed" dialog says: a headline, the reason, and any further lines. */
   failure: { title: string; message: string | null; details: string[] } | null;
   /**
@@ -74,6 +81,7 @@ let state: State = {
   page: opensOn,
   dialog: "none",
   question: null,
+  address: null,
   failure: null,
   blocked: null,
   copied: false,
@@ -145,8 +153,18 @@ export function view(s: State) {
   const rows = site?.rows ?? [];
   /** The install folder is there and is a game folder. Only then are there versions to show. */
   const gameFolder = rows.some((row) => row.kind === "folder" && row.ok);
-  /** The ready screen has more lines than fit at their usual height. It then draws them closer together. */
-  const tightRows = rows.length > ROWS_AT_EASE;
+  /**
+   * The ready screen has more lines than fit at their usual height. It then draws them closer
+   * together. Under the lines the backend lists stands one of the page's own, where the way
+   * of patching is chosen, whenever there is a game folder.
+   */
+  /**
+   * The way of patching that is chosen is one the drive does not take: the backend's line
+   * of it. It is not drawn among the lines; the page's own line for the choice carries it.
+   */
+  const wayRefused = rows.find((row) => row.kind === "way" && row.ok === false) ?? null;
+  const listedRows = rows.filter((row) => row.kind !== "way");
+  const tightRows = listedRows.length + (gameFolder ? 1 : 0) > ROWS_AT_EASE;
   /** What is in the way of the start that was turned down, a sentence each. */
   const listed = inTheWayOf(sites.find((site) => site.server === s.blocked?.server));
   const inTheWay = listed.length > 0 ? listed : (s.blocked?.messages ?? []);
@@ -159,7 +177,7 @@ export function view(s: State) {
   /** This version of the app is too old to patch with; a newer one has to be got first. */
   const outdated = s.app.update?.required ?? false;
 
-  return { page, site, gameFolder, tightRows, inTheWay, downloadSpeed, remaining, outdated };
+  return { page, site, gameFolder, listedRows, wayRefused, tightRows, inTheWay, downloadSpeed, remaining, outdated };
 }
 
 /**
@@ -183,6 +201,12 @@ function heard(site: SiteView) {
   if (state.dialog === "blocked" && site.server === state.blocked?.server && inTheWayOf(site).length === 0) {
     set({ dialog: "none" });
   }
+  // The window was closed on a run at work, and the user is asked what is to become of the
+  // run. The backend says so with the run, and again once that is settled: by an answer,
+  // or by the run, which has stopped or ended meanwhile.
+  const [asking, asked] = [site.run?.asking ?? false, known?.run?.asking ?? false];
+  if (asking && !asked) set({ dialog: "closing" });
+  if (!asking && asked && state.dialog === "closing") set({ dialog: "none" });
   // A run that has finished has the screen to itself.
   if (site.phase === "done" && known?.phase !== "done") set({ dialog: "none" });
   const failure = site.run?.failure ?? null;
@@ -258,7 +282,8 @@ function report(title: string, reason: unknown) {
 
 /** Opens a page. Whatever dialog is open is closed with it, as by its own button. */
 export function openPage(page: Page) {
-  set({ page, dialog: "none" });
+  closeDialog();
+  set({ page });
 }
 
 /** Asks the server again right away, after a check that failed. */
@@ -267,12 +292,12 @@ export function checkAgain(server: ServerId) {
 }
 
 /**
- * Starts the patch the page of `server` offers, or the patch file at `file` when one is
- * given. The backend looks at the folder first, and says why when it begins nothing.
+ * Waits for a start that was asked of the backend for `server`, and shows why when no run
+ * was begun. The backend looks at the folder first, and decides.
  */
-export async function start(server: ServerId, file: string | null = null) {
+async function begun(server: ServerId, asked: Promise<void>) {
   try {
-    await startPatch(server, file);
+    await asked;
   } catch (reason) {
     const refusal = reason as Refusal;
     // A run is at work already: the button was pressed twice.
@@ -281,11 +306,51 @@ export async function start(server: ServerId, file: string | null = null) {
       set({ blocked: { server, messages: refusal.messages }, dialog: "blocked" });
       return;
     }
+    // An address that is Nexon's and not among the game's own patch files is only used
+    // after a yes, which the backend takes for that one address. The question is its own.
+    if (refusal.kind === "ask") {
+      set({
+        question: {
+          message: refusal.messages[0] ?? "",
+          detail: "",
+          yes: () => begun(server, confirmPatchAddress(server)),
+        },
+        dialog: "ask",
+      });
+      return;
+    }
     // Nothing was tried and nothing failed. What is in the way is the headline itself, as
     // it is when the ready screen says what is in the way.
     const [title, ...rest] = refusal.messages.join("\n").split("\n");
     set({ failure: { title, message: rest.join("\n") || null, details: [] }, dialog: "failed" });
   }
+}
+
+/** Starts the patch the page of `server` offers. */
+export function start(server: ServerId) {
+  return begun(server, startPatch(server));
+}
+
+/**
+ * Lets the user state where the patch for `server` is. The field begins with the address
+ * the backend gives for it: that of the patch the app found, or where the next would be.
+ */
+export function enterAddress(server: ServerId) {
+  const value = state.app.sites.find((site) => site.server === server)?.patchAddress ?? "";
+  set({ address: { server, value }, dialog: "address" });
+}
+
+/** Takes in what the user types into the field of the "address" dialog. */
+export function typeAddress(value: string) {
+  if (state.address) set({ address: { ...state.address, value } });
+}
+
+/** Starts the patch at the address in the field. The backend decides whether one is fetched from there. */
+export function startAtAddress() {
+  const given = state.address;
+  if (!given) return;
+  set({ dialog: "none" });
+  return begun(given.server, startPatchAt(given.server, given.value));
 }
 
 /** Leaves a paused, failed or finished run and shows the ready screen again. */
@@ -297,60 +362,49 @@ export function pause(server: ServerId) {
   stopPatch(server);
 }
 
-/** Uses `folder` as the install folder; `null` goes back to finding it automatically. */
-export async function switchFolder(server: ServerId, folder: string | null) {
+/** Waits for a change of the install folder that was asked of the backend, and says so when it could not be made. */
+async function folderChanged(asked: Promise<void>) {
   try {
-    await setInstallDir(server, folder);
+    await asked;
   } catch (reason) {
     report("설치 경로를 변경할 수 없습니다.", reason);
   }
 }
 
-export async function changeFolder(server: ServerId) {
-  const folder = await pickFolder();
-  if (folder !== null) await switchFolder(server, folder);
+/** Lets the user pick the install folder, in a dialog the backend opens. */
+export function changeFolder(server: ServerId) {
+  return folderChanged(pickInstallDir(server));
 }
 
-export async function patchFromFile(server: ServerId) {
-  const file = await pickPatchFile();
-  if (file === null) return;
-  // A patch file replaces the game's programs. One that Windows knows was downloaded from
-  // somewhere other than Nexon is only applied after a yes.
-  const origin = await foreignOrigin(file);
-  if (origin === null) return start(server, file);
-  set({
-    question: {
-      message: "공식 다운로드 출처를 확인할 수 없습니다.\n이 파일로 패치하시겠습니까?",
-      detail: origin,
-      yes: () => start(server, file),
-    },
-    dialog: "ask",
-  });
+/** Goes back from a folder the user picked to the one that is found automatically. */
+export function findFolder(server: ServerId) {
+  return folderChanged(resetInstallDir(server));
 }
 
 /**
- * Deletes what a run that will not be continued left in the install folder. A run that left
- * the folder partly new is only given up after a yes: its files exist nowhere else, and
- * without them this app cannot make the game whole again.
+ * Deletes what a run that will not be continued left in the install folder. Where the app
+ * cannot make good what goes with it, that is only done after a yes: a run that left the
+ * folder partly new, whose files exist nowhere else, and an apply whose record cannot be
+ * read, which can no longer be undone. The backend says which folders those are.
  */
 export function discard(server: ServerId) {
-  if (!state.app.sites.find((site) => site.server === server)?.halfPatched) {
-    discardNow(server);
+  if (!state.app.sites.find((site) => site.server === server)?.discardAsks) {
+    discardNow(server, false);
     return;
   }
   set({
     question: {
       message: "삭제 후에는 공식 런처로 게임을 복구해야 합니다.\n이전 패치 작업을 삭제하시겠습니까?",
       detail: "",
-      yes: () => discardNow(server),
+      yes: () => discardNow(server, true),
     },
     dialog: "ask",
   });
 }
 
-async function discardNow(server: ServerId) {
+async function discardNow(server: ServerId, confirmed: boolean) {
   try {
-    await discardLeftovers(server);
+    await discardLeftovers(server, confirmed);
   } catch (reason) {
     report("이전 패치 작업을 삭제할 수 없습니다.", reason);
   }
@@ -410,7 +464,20 @@ export async function setSetting(name: keyof Settings, on: boolean) {
 }
 
 export function closeDialog() {
+  // The question on closing the window stays open in the backend until it is answered, and
+  // a window closed again over it stops the run. Put aside, it is answered: nothing changes.
+  if (state.dialog === "closing") void answerClose("stay");
   set({ dialog: "none" });
+}
+
+/**
+ * Answers the question on closing the window during a run: with `on` the run goes on and
+ * the app is next to the clock for the time being, without it the run is stopped and the
+ * app goes.
+ */
+export function answerClosing(on: boolean) {
+  set({ dialog: "none" });
+  void answerClose(on ? "background" : "quit");
 }
 
 /** Answers the "ask" dialog with a yes. */

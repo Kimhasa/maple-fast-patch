@@ -69,7 +69,7 @@ pub fn files_under(dir: &Path) -> BTreeMap<String, Vec<u8>> {
 
 // Not every test uses every one of these.
 #[allow(unused_imports)]
-pub use builder::{Op, PatchBuilder, Rng, copy};
+pub use builder::{Op, PatchBuilder, Rng, copy, with_header, wrap};
 
 /// A made-up install, a patch for it, and what the install must look like afterwards.
 pub struct World {

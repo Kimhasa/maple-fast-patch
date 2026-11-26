@@ -8,7 +8,10 @@ use std::time::{Duration, Instant};
 
 use mfp_engine::Stage;
 use mfp_engine::detect::Checksums;
+use mfp_engine::plan::Plan;
 use mfp_engine::preflight::{self, Problem, Programs};
+#[cfg(test)]
+use mfp_engine::run::Room;
 use mfp_kms::{Client, Server, notice};
 use serde::Serialize;
 
@@ -30,9 +33,20 @@ pub(crate) struct Patcher {
     pub(crate) stop: Arc<AtomicBool>,
     /// The window was asked to close during a run; the app exits once the run has stopped.
     pub(crate) closing: AtomicBool,
+    /// The window was closed on a run, and the user said that the run is to go on: the
+    /// window is put away and the app is next to the clock for the time being, though it is
+    /// not set to stay there. Until the window is brought back.
+    put_away: AtomicBool,
     pub(crate) settings: Mutex<Settings>,
     /// Word of a newer version of this app, when its home was last read and had one.
     pub(crate) update: Mutex<Option<Update>>,
+    /// The app's home was asked for that word once at least since the app was started,
+    /// whether or not it answered. Until then the app does nothing by itself; see
+    /// [`decide`](crate::flow::decide).
+    pub(crate) update_asked: AtomicBool,
+    /// The app's home is to be asked again now, without waiting for the day to pass: a
+    /// maintenance has begun, which is when patches come out.
+    pub(crate) update_due: AtomicBool,
     /// The app's data folder, where the settings and the log are kept.
     pub(crate) data: PathBuf,
     /// One for each client the app looks after: the live game first, then the test world.
@@ -55,8 +69,11 @@ impl Patcher {
             running: AtomicU8::new(0),
             stop: Arc::default(),
             closing: AtomicBool::new(false),
+            put_away: AtomicBool::new(false),
             settings: Mutex::new(Settings::load(&data)),
             update: Mutex::default(),
+            update_asked: AtomicBool::new(false),
+            update_due: AtomicBool::new(false),
             data,
             sites,
         }
@@ -103,6 +120,26 @@ impl Patcher {
     pub(crate) fn end_run(&self) {
         self.running.store(0, Ordering::SeqCst);
     }
+
+    /// Whether the app stays at work next to the clock when its window is closed: the user
+    /// has set it so, or said so of a run when they closed the window on it. The app's
+    /// icon is there exactly then, whichever of the two has just changed.
+    pub(crate) fn stays(&self) -> bool {
+        self.settings.lock().unwrap().background || self.put_away.load(Ordering::SeqCst)
+    }
+
+    /// The window is put away for a run that is to go on; see [`Patcher::stays`]. What the
+    /// user has set stays as it is.
+    pub(crate) fn put_away(&self) {
+        self.put_away.store(true, Ordering::SeqCst);
+    }
+
+    /// The window is back. Says whether it had been put away for a run: from here on the
+    /// app stays next to the clock only if it is set to, and a window that is closed on a
+    /// run asks again.
+    pub(crate) fn brought_back(&self) -> bool {
+        self.put_away.swap(false, Ordering::SeqCst)
+    }
 }
 
 /// One client's side of the app: where its game is installed, what the app keeps about that
@@ -130,11 +167,14 @@ pub(crate) struct Site {
     /// Set to make a check that is at work give up: the folder it is about was left, or a
     /// run wants to start. Each check clears it when it begins.
     pub(crate) check_stop: Arc<AtomicBool>,
-    /// Held while an apply that was cut off is being undone, so two looks do not both
-    /// try.
-    pub(crate) restoring: Mutex<()>,
-    /// A failed attempt to undo a cut-off run has been written to the log.
-    pub(crate) restore_logged: AtomicBool,
+    /// How putting the install folder back stands, after an apply that was cut off in it.
+    pub(crate) heal: Mutex<Heal>,
+    /// What is known of the patch file on this PC that a run would apply; see [`PatchRead`].
+    pub(crate) read: Mutex<PatchRead>,
+    /// What a run is taken to ask of the drive, in place of what a patch file says: tests
+    /// have no patch file to read it from.
+    #[cfg(test)]
+    pub(crate) made_room: Mutex<Option<Room>>,
     /// Checksums of install files read so far, and the install folder they are of.
     pub(crate) checksums: Mutex<(PathBuf, Checksums)>,
     /// Last write test of the install folder and when it was made.
@@ -152,6 +192,10 @@ pub(crate) struct Site {
     pub(crate) measure: Mutex<Option<Measure>>,
     /// The measurement of the last run that finished, as the text [`run_report`](crate::measure::run_report) hands out.
     pub(crate) report: Mutex<Option<String>>,
+    /// The address the user gave that waits for their yes: it is Nexon's, and not among
+    /// this client's own patch files. See
+    /// [`confirm_patch_address`](crate::patching::confirm_patch_address).
+    pub(crate) asked_about: Mutex<Option<String>>,
 }
 
 impl Site {
@@ -167,8 +211,10 @@ impl Site {
             found: Mutex::default(),
             busy: Mutex::default(),
             check_stop: Arc::default(),
-            restoring: Mutex::default(),
-            restore_logged: AtomicBool::new(false),
+            heal: Mutex::default(),
+            read: Mutex::default(),
+            #[cfg(test)]
+            made_room: Mutex::default(),
             checksums: Mutex::default(),
             write_test: Mutex::default(),
             told: Mutex::default(),
@@ -176,6 +222,7 @@ impl Site {
             check_failure: Mutex::default(),
             measure: Mutex::default(),
             report: Mutex::default(),
+            asked_about: Mutex::default(),
         }
     }
 
@@ -232,15 +279,40 @@ impl Site {
         self.stand_ins.patch_address(self.client, self.client.patch_url(from, to))
     }
 
+    /// Where the client's patch files are published: what their addresses begin with,
+    /// before the folder of a version; see [`Client::patch_files`].
+    pub(crate) fn patch_files(&self) -> String {
+        self.stand_ins.patch_address(self.client, self.client.patch_files().to_owned())
+    }
+
     /// Address of a minor patch file; see [`Client::minor_patch_url`].
     pub(crate) fn minor_patch_url(&self, version: u32, from: u32, to: u32) -> String {
         self.stand_ins.patch_address(self.client, self.client.minor_patch_url(version, from, to))
     }
 
+    /// The folder the Nexon installer registered for the client; see
+    /// [`Client::find_install_dir`].
+    pub(crate) fn registered_dir(&self) -> Option<PathBuf> {
+        match self.stand_ins.registered() {
+            Some((dir, _)) => Some(dir.to_path_buf()),
+            None => self.client.find_install_dir(),
+        }
+    }
+
+    /// What the registry gives for the version of the registered install; see
+    /// [`Client::version_hint`]. It is where the look for the folder's patches starts, and
+    /// proves nothing about the folder.
+    pub(crate) fn registry_version(&self) -> Option<u32> {
+        match self.stand_ins.registered() {
+            Some((_, version)) => Some(version),
+            None => self.client.version_hint(),
+        }
+    }
+
     /// The registry's guess at the installed version, for an install folder that is not the
-    /// one the registry names; see [`Client::version_hint`].
+    /// one the registry names.
     pub(crate) fn version_guess(&self) -> Option<u32> {
-        self.stand_ins.version().or_else(|| self.client.version_hint())
+        self.stand_ins.version().or_else(|| self.registry_version())
     }
 
     /// The inspection service, if it lists this client's maintenance: the address it is
@@ -300,6 +372,31 @@ impl Site {
     }
 }
 
+/// What a patch file on this PC does, read once so that the looks can tell what a run of it
+/// asks the drive to have free; see [`read_patch`](crate::ready::read_patch).
+#[derive(Default)]
+pub(crate) struct PatchRead {
+    /// The file a thread is reading now.
+    pub(crate) reading: Option<PathBuf>,
+    /// The file that was last read, by where it is and how long it is, and what it does.
+    /// Nothing where it could not be read: a run of it says what is wrong with it.
+    pub(crate) read: Option<(PathBuf, u64, Option<Plan>)>,
+}
+
+/// How putting an install folder back stands, after an apply that was cut off in it; see
+/// [`put_back`](crate::ready::put_back).
+#[derive(Default)]
+pub(crate) struct Heal {
+    /// An attempt is at work, on a thread of its own: without the record of the apply it
+    /// takes as long as a check of the game files.
+    pub(crate) at_work: bool,
+    /// The attempt that last ended did not put the folder back: when it ended, and what the
+    /// screen says of it. The next one is made after a while, not at every look.
+    pub(crate) failed: Option<(Instant, String)>,
+    /// That it cannot be put back has been written to the log.
+    pub(crate) logged: bool,
+}
+
 /// What a check went by when it found no proof of the version an install folder is at: the
 /// folder as it was, and what the server had. While neither has changed, looking for a
 /// proof again would find none again, and is not done.
@@ -352,6 +449,18 @@ pub(crate) struct Target {
     pub(crate) minor: Option<u32>,
 }
 
+impl Target {
+    /// Which of the two kinds of patch it is, by what Nexon's notices call them: one that
+    /// brings a new version is a client patch (`ver1.2.422 클라이언트 패치`), and one within
+    /// a version a minor patch (`마이너버전(4) 패치`).
+    pub(crate) fn kind(&self) -> &'static str {
+        match self.minor {
+            Some(_) => "마이너 패치",
+            None => "클라이언트 패치",
+        }
+    }
+}
+
 /// What a look at the install folder finds: the folder, the checks made before a patch may
 /// start there, and what an unfinished run left.
 #[derive(Clone)]
@@ -359,6 +468,10 @@ pub(crate) struct Status {
     pub(crate) install_dir: Option<String>,
     /// Installed version, such as `1.2.421`, when it is known.
     pub(crate) version: Option<String>,
+    /// Where the patch from that version to the next one would be published. It is what the
+    /// user is given to begin from when they state an address themselves and the app has
+    /// found no patch.
+    pub(crate) next_address: Option<String>,
     /// Every check made before a patch may start, passed or not.
     pub(crate) checks: Vec<Check>,
     /// The folder was picked by the user instead of found automatically.
@@ -367,14 +480,25 @@ pub(crate) struct Status {
     pub(crate) leftover: Option<String>,
     /// An earlier run was paused or interrupted and can be continued.
     pub(crate) resumable: bool,
-    /// The patch file on this PC that run was applying, when it was one the user had picked.
-    /// Continuing means continuing with that file, also after the app was closed in between.
-    pub(crate) resume_file: Option<String>,
+    /// The address of the patch that run was applying, when it was one the user had given.
+    /// Continuing means continuing with the patch there, also after the app was closed in
+    /// between.
+    pub(crate) resume_address: Option<String>,
     /// How far the bar had come in that run, when the files it built are still there.
     pub(crate) resume_percent: Option<f64>,
     /// That run replaced game files as it built them, so the folder is partly new. Only
     /// finishing the same patch makes it whole; its files exist nowhere else.
     pub(crate) half_patched: bool,
+    /// That run was cut off while applying, and the record it kept so that the apply could
+    /// be undone cannot be read. Nothing can go on over it and nothing puts it back: what
+    /// the run left can only be removed as it is, which leaves the folder a mix.
+    pub(crate) unreadable_journal: bool,
+    /// An apply was cut off in the folder and is being undone, or is about to be. Until it
+    /// is, the folder is neither version: nothing is said of it and nothing starts in it.
+    pub(crate) putting_back: bool,
+    /// The patch file a run here would apply, when all of it is on this PC and what it does
+    /// has not been read yet. Once it is read, the line for the room says what a run needs.
+    pub(crate) unread_patch: Option<String>,
     /// A patch here is the user's to start, whatever they have set: the client is one this
     /// app has never been tried on (see [`Site::untried`]), and it has not patched this
     /// folder before.
@@ -391,12 +515,27 @@ impl Status {
     /// Whether a check has anything to say of the folder: it is a game folder, or an apply
     /// that was cut off in it is still to be undone, which is what a check then says.
     pub(crate) fn askable(&self) -> bool {
-        self.game_folder() || self.checks.iter().any(|check| check.kind == CheckKind::Recovery)
+        self.game_folder() || self.putting_back || self.checks.iter().any(|check| check.kind == CheckKind::Recovery)
     }
 
-    /// Something is in the way of a patch: one of the checks has not passed.
+    /// Something is in the way of a patch: one of the checks has not passed, or the folder
+    /// is still being put back.
     pub(crate) fn blocked(&self) -> bool {
-        self.checks.iter().any(|check| !check.ok)
+        self.putting_back || self.checks.iter().any(|check| !check.ok)
+    }
+
+    /// The folder, when an apply that was cut off in it is still to be undone and that
+    /// can be tried: it is being put back, or the last attempt failed for the time being.
+    pub(crate) fn to_put_back(&self) -> Option<&str> {
+        let failed = !self.unreadable_journal && self.checks.iter().any(|check| check.kind == CheckKind::Recovery);
+        self.install_dir.as_deref().filter(|_| self.putting_back || failed)
+    }
+
+    /// Whether removing what a run left here cannot be made good by this app, so that the
+    /// user is asked before it is removed: the folder is partly new, or the record of an
+    /// apply that was cut off in it cannot be read.
+    pub(crate) fn discard_asks(&self) -> bool {
+        self.half_patched || self.unreadable_journal
     }
 }
 
@@ -413,6 +552,9 @@ pub(crate) enum CheckKind {
     Space,
     /// An apply that was cut off could be undone.
     Recovery,
+    /// The way of patching that was chosen is one the drive takes. The page says this on
+    /// its own line for the choice, which is also the way out.
+    Way,
 }
 
 impl CheckKind {
@@ -424,6 +566,7 @@ impl CheckKind {
             CheckKind::Writable => "쓰기 권한",
             CheckKind::Space => "여유 공간",
             CheckKind::Recovery => "패치 복구",
+            CheckKind::Way => "패치 방식",
         }
     }
 }
@@ -567,6 +710,14 @@ mod tests {
     }
 
     #[test]
+    fn a_patch_is_of_the_kind_nexons_notices_call_it() {
+        let main = crate::made::target("1.2.422");
+        assert_eq!(main.kind(), "클라이언트 패치");
+        let minor = Target { label: "1.2.421 (4)".to_owned(), version: 421, minor: Some(4), ..main };
+        assert_eq!(minor.kind(), "마이너 패치");
+    }
+
+    #[test]
     fn there_is_one_run_at_a_time_and_it_is_known_whose() {
         let patcher = Patcher::new(PathBuf::from("data"));
         let site = &patcher.sites[0];
@@ -578,6 +729,40 @@ mod tests {
         patcher.end_run();
         assert!(patcher.running().is_none());
         assert!(patcher.begin_run(site));
+    }
+
+    /// Where the app's icon is next to the clock, and what closing the window goes by.
+    #[test]
+    fn the_app_stays_next_to_the_clock_while_it_is_set_to_or_was_put_away_for_a_run() {
+        let patcher = Patcher::new(PathBuf::from("data"));
+        let set = |background: bool| patcher.settings.lock().unwrap().background = background;
+        assert!(!patcher.stays());
+        // Set to stay: it does, and bringing the window back changes nothing.
+        set(true);
+        assert!(patcher.stays());
+        assert!(!patcher.brought_back());
+        assert!(patcher.stays());
+        set(false);
+        assert!(!patcher.stays());
+
+        // Put away for a run, with nothing set: it stays until the window is back.
+        patcher.put_away();
+        assert!(patcher.stays());
+        assert!(!patcher.settings.lock().unwrap().background);
+        // The setting switched on and off again meanwhile takes nothing from that.
+        set(true);
+        assert!(patcher.stays());
+        set(false);
+        assert!(patcher.stays());
+        assert!(patcher.brought_back());
+        assert!(!patcher.stays());
+        assert!(!patcher.brought_back());
+
+        // Switched on while put away, and left on: it stays once the window is back as well.
+        patcher.put_away();
+        set(true);
+        assert!(patcher.brought_back());
+        assert!(patcher.stays());
     }
 
     #[test]

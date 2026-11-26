@@ -58,12 +58,21 @@ export default function App() {
           {v.page === "settings" ? (
             <SettingsPage settings={s.app.settings} inert={dialogOpen} />
           ) : (
-            v.site && <ServerPage key={v.site.server} site={v.site} v={v} copied={s.copied} inert={dialogOpen} />
+            v.site && (
+              <ServerPage
+                key={v.site.server}
+                site={v.site}
+                v={v}
+                settings={s.app.settings}
+                copied={s.copied}
+                inert={dialogOpen}
+              />
+            )
           )}
 
           {dialogOpen && (
             <div className={`dim ${v.page === "settings" ? "whole" : ""}`}>
-              <div className="dlg">
+              <div className={`dlg ${s.dialog === "address" ? "wide" : ""}`}>
                 <div className="hd">
                   <b>MAPLE FAST PATCH</b>
                   <button title="닫기" onClick={patcher.closeDialog}>
@@ -93,6 +102,52 @@ function DialogBody({ s, v }: { s: patcher.State; v: ReturnType<typeof patcher.v
         <button className="primary" onClick={patcher.closeDialog} autoFocus>
           확인
         </button>
+      </div>
+    );
+  }
+  if (s.dialog === "address" && s.address) {
+    return (
+      <div className="bd">
+        <label className="field">
+          패치 주소
+          <input
+            value={s.address.value}
+            onChange={(event) => patcher.typeAddress(event.target.value)}
+            onFocus={(event) => event.target.select()}
+            onKeyDown={(event) => {
+              // The key answers this dialog and no other: what it would go on to do is left
+              // undone, or it would press the button of whatever dialog the answer opens.
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              patcher.startAtAddress();
+            }}
+            spellCheck={false}
+            autoFocus
+          />
+        </label>
+        <div className="pair">
+          <button className="primary" onClick={patcher.startAtAddress}>
+            확인
+          </button>
+          <button className="primary second" onClick={patcher.closeDialog}>
+            취소
+          </button>
+        </div>
+      </div>
+    );
+  }
+  if (s.dialog === "closing") {
+    return (
+      <div className="bd">
+        <p>{"패치가 진행 중입니다.\n백그라운드에서 계속 진행하시겠습니까?"}</p>
+        <div className="pair">
+          <button className="primary" onClick={() => patcher.answerClosing(true)} autoFocus>
+            확인
+          </button>
+          <button className="primary second" onClick={() => patcher.answerClosing(false)}>
+            종료
+          </button>
+        </div>
       </div>
     );
   }

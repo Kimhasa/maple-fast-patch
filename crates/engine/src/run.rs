@@ -16,7 +16,7 @@ use crate::immediate;
 use crate::plan::{self, Plan};
 use crate::preflight::{self, Problem, Programs, SPACE_MARGIN, SpaceNeed};
 use crate::stage::{self, Checked, Dirs};
-use crate::storage::{self, Profile, Volume};
+use crate::storage::{self, Profile};
 
 /// The steps of a run, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,9 +24,11 @@ pub enum Stage {
     Download,
     VerifyPatch,
     VerifyInstall,
-    /// Only in the immediate way, and only before its first game file is replaced: every
-    /// new file is built once and kept nowhere, to see that the patch can be built from the
-    /// files that are there.
+    /// Only in the immediate way, only before its first game file is replaced, and only
+    /// where the drive has not the room to build every new file before the first is placed:
+    /// every new file is built once and kept nowhere, to see that the patch can be built
+    /// from the files that are there. A run with room for all of them has no such step. It
+    /// builds them all before it places any, which shows the same.
     Trial,
     Rebuild,
     Apply,
@@ -60,8 +62,13 @@ pub enum Event {
     /// Space the next step needs on a drive, and what is free there. Sent before the download
     /// and again, with the exact figure, once the patch file has been read.
     Space { needed: u64, available: u64 },
-    /// An earlier run had stopped while applying; the install folder was restored first.
-    Restored,
+    /// An earlier run had stopped while applying; the install folder was put back first.
+    /// How it was put back is one of three: [`Leftover::RolledBack`], from the journal of
+    /// that apply; [`Leftover::Restored`], without the journal, and then proven against the
+    /// patch file to be the version before the patch; or [`Leftover::PutBack`], without the
+    /// journal and without that proof. It is what [`recover`] returns of such a folder, and
+    /// is told there.
+    Restored(Leftover),
     /// What was found out about the drive the game is on, and how it is read because of
     /// that. Sent once, before the game files are checked. See [`storage`].
     Storage { file_system: String, seek_ms: Option<f64>, slow: bool, readers: usize, checkers: usize, unbuffered: bool },
@@ -77,11 +84,17 @@ pub enum Source {
 pub struct Options {
     pub install_dir: PathBuf,
     pub source: Source,
-    /// Whether the player allows the immediate way (see [`immediate`]), in which new files
-    /// replace the originals while others are still being built and a run that stops partway
-    /// cannot be undone. Allowing it does not choose it: with room for the safe way, the
-    /// safe way is taken, and it is not begun on a drive that is not NTFS. An install folder
-    /// that is already half patched goes on the immediate way whatever this says.
+    /// Which way of patching the player chose. With this set, the run goes the immediate way
+    /// (see [`immediate`]) from its start, whatever room the drive has: new files replace
+    /// the originals while others are still being built, and a run that stops partway
+    /// cannot be undone, only finished. Without it the run goes the safe way and nothing
+    /// else: it is refused for room where the new files do not fit next to the old ones.
+    ///
+    /// The choice is not bent in either direction. A run that was asked to go the immediate
+    /// way on a drive that is not NTFS is refused with
+    /// [`Problem::ImmediateNeedsNtfs`], before anything is fetched or read: it does not
+    /// quietly go the safe way. The one thing that outweighs the choice is a folder that is
+    /// half patched already, which goes on the immediate way whatever this says.
     pub immediate: bool,
     /// Who decides how the drive is read.
     pub storage: storage::Choice,
@@ -91,8 +104,9 @@ pub struct Options {
 pub struct Outcome {
     /// Files placed, replaced or removed. Zero means the install was already up to date.
     pub files_changed: usize,
-    /// Whether this run went the immediate way: it moved new files into place as they were
-    /// built. False for a run that went the safe way from start to finish.
+    /// Whether this run went the immediate way: that way was chosen, or the folder was half
+    /// patched. It is so also when the run found nothing to put in place ahead of the
+    /// others. False for a run that went the safe way from start to finish.
     pub immediate: bool,
 }
 
@@ -149,6 +163,34 @@ impl Drop for InstallLock {
 
 /// Restores the install folder if an earlier run was cut off while applying. Safe to call at
 /// any time; does nothing while another run holds the folder.
+///
+/// What comes back says how the folder was put back:
+///
+/// - [`Leftover::RolledBack`]: from the journal of the apply, step by step. The folder is as
+///   it was before that apply.
+/// - [`Leftover::Restored`]: the journal could not be read, or was gone. The folder was put
+///   back from what the apply had moved aside, and then checked against the patch file,
+///   which was found among the downloads in the work folder: for every file that patch has
+///   a say about, the folder is the version before the patch. Nothing needs to be asked of
+///   anyone; the patch can simply be applied again.
+/// - [`Leftover::PutBack`]: as before, but the folder is not vouched for as the old
+///   version. The check could not be made: the patch file was not among the downloads, or
+///   the folder is half patched and never was the old version. Or it was made and found a
+///   file that is the new one, with no original to put in its place, while every original
+///   the patch still needs is the right file. Everything the apply had moved aside is
+///   back; the run that comes next checks every original it needs before it changes
+///   anything, as every run does, and where the patch still fits it simply applies.
+///
+/// It fails with [`Problem::UnreadableJournal`] where the journal cannot be read and the
+/// folder cannot be put back without it either: what was moved aside is not what the patch
+/// says the old files are, or the check afterwards found that the patch cannot be applied
+/// to what is there, or an earlier version moved things aside without their names. The
+/// `detail` says which.
+/// Nothing but [`discard_work_as_it_is`] clears such a folder. A file held by another
+/// program or a link in the way fail as themselves, and the next call tries again.
+///
+/// Putting a folder back without its journal reads the patch file and the originals, which
+/// takes as long as the check of the game files at the start of a run.
 pub fn recover(install_dir: &Path) -> Result<Leftover> {
     let dirs = Dirs::new(install_dir);
     if !dirs.work().exists() {
@@ -156,6 +198,13 @@ pub fn recover(install_dir: &Path) -> Result<Leftover> {
     }
     let _lock = InstallLock::acquire(&dirs)?;
     apply::recover(&dirs)
+}
+
+/// Whether an apply was cut off in this install folder and is still to be undone, which is
+/// what [`recover`] does. True also where the journal of that apply is gone and only what
+/// it moved aside tells of it.
+pub fn cut_off(install_dir: &Path) -> bool {
+    apply::cut_off(&Dirs::new(install_dir))
 }
 
 /// Whether the install folder is half patched: a run in the immediate way moved new files
@@ -172,14 +221,94 @@ pub fn half_patched(install_dir: &Path) -> bool {
 /// Patch files downloaded into the work folder go with it, and so does the marker of a
 /// half-patched install folder. That folder is not put back: what the immediate way has
 /// replaced stays replaced, and with the staged files gone no patch can finish it.
+///
+/// A work folder that is a link to somewhere else is no work of the engine's. The link is
+/// taken away, and what it leads to is left as it is.
+///
+/// An apply that cannot be undone, neither from its journal nor from what it moved aside,
+/// leaves its work folder here: this fails with [`Problem::UnreadableJournal`] and removes
+/// nothing, so that nothing clears such a folder by accident. See [`discard_work_as_it_is`].
 pub fn discard_work(install_dir: &Path) -> Result<()> {
+    discard(install_dir, false)
+}
+
+/// [`discard_work`] for an install folder whose apply was cut off and cannot be undone: its
+/// journal cannot be read, and the folder could not be put back from what the apply moved
+/// aside either ([`Problem::UnreadableJournal`]). The last resort, for a caller who has
+/// been told what that leaves and asks for it all the same.
+///
+/// Wherever [`discard_work`] can do its work, this does exactly that work: the apply is
+/// undone first, from its journal or, where that cannot be read, from what it moved aside.
+/// Only where neither can be done is the apply passed over, and then the work folder is
+/// removed as it is, with nothing in it trusted or acted on:
+///
+/// - Nothing outside the work folder is touched. No file of the game is moved, written or
+///   removed.
+/// - No link is followed. A link in the work folder goes as the link it is, and so does a
+///   work folder that is one.
+/// - Everything in the work folder goes: the new files that were built and not yet placed,
+///   the patch files downloaded into it, the marker of a half-patched folder, and what the
+///   apply had moved aside. Those are files of the game, and for a file the apply replaced
+///   or deleted they are the only copy of the old version.
+///
+/// The install folder is then, for good, what it was when this was called. If nothing
+/// could be put back, that is what the apply left when it was cut off, and each file that
+/// the patch replaces, creates or deletes is in one of these states, with nothing on this
+/// PC to say which:
+///
+/// - as it was before the patch, where the apply had not come to it;
+/// - as the patch makes it: the new file in place, or the file gone;
+/// - missing although the patch does not delete it. That can be one file at most, the one
+///   that was being replaced at the moment the apply was cut off: its old version was
+///   among what was moved aside, and its new version among the built files. If that one
+///   file is the game's own program, the folder is no longer taken for a folder of the
+///   game at all.
+///
+/// If putting back got as far as moving the originals back and then found a file that is
+/// not the old one, every file is the old one again but those the `detail` of the problem
+/// named. Files the patch does not name are as they were, and no file is half written:
+/// files are only ever moved into place whole.
+///
+/// So the folder may be neither the old version nor the new one. A later run goes by the
+/// files themselves, as every run does. A patch goes through if each file it still has to
+/// build can be built from files that are there and are the ones it was made for; files
+/// that are the new version already are left alone. Any other patch is refused with
+/// [`Error::OriginalMismatch`] and changes nothing. The patch that was cut off may be
+/// either: with the built files gone, it can no longer build a file from an original that
+/// its own apply has replaced. Where no patch fits, the game's own launcher or a new
+/// install is what puts the folder right.
+///
+/// Fails like [`discard_work`] while a run holds the folder, and for whatever else keeps a
+/// journal that can be read from being undone: a file held open, a link in the way.
+pub fn discard_work_as_it_is(install_dir: &Path) -> Result<()> {
+    discard(install_dir, true)
+}
+
+/// Removes the work folder of `install_dir`. An apply that was cut off is undone first. If
+/// it cannot be, its journal being one that cannot be read, `as_it_is` says to remove the
+/// work folder anyway.
+fn discard(install_dir: &Path, as_it_is: bool) -> Result<()> {
     let dirs = Dirs::new(install_dir);
-    if !dirs.work().exists() {
+    let work = dirs.work();
+    if fs::symlink_metadata(&work).is_err() {
         return Ok(());
     }
     let _lock = InstallLock::acquire(&dirs)?;
-    apply::recover(&dirs)?;
-    stage::remove_work(&dirs.work())
+    // Only an apply that was cut off has to be undone. Everything else in the work folder
+    // simply goes, and removing a folder follows no link that may be in it.
+    if !apply::is_link(&work) && apply::cut_off(&dirs) {
+        let unread = apply::journal_cannot_be_read(&dirs);
+        match apply::recover(&dirs) {
+            // Turned away: the folder cannot be put back, or a link in the work folder
+            // keeps anything from being tried. A journal that can be read is not passed
+            // over for that; it is undone once what is in its way is gone.
+            Err(Error::Blocked(_)) if as_it_is && unread => {}
+            undone => {
+                undone?;
+            }
+        }
+    }
+    stage::remove_work(&work)
 }
 
 /// Runs a patch on the install folder of the client whose programs are `programs`. A folder
@@ -230,15 +359,27 @@ pub fn run_on_disk(
     let _lock = InstallLock::acquire(&dirs)?;
     // Restoring comes before the check that counts: a run that died while replacing the
     // game's own executable leaves a folder that would not pass it.
-    if apply::recover(&dirs)? == Leftover::RolledBack {
-        on_event(Event::Restored);
+    // The patch file this run was given may be the one whose apply was cut off. A folder
+    // that has to be put back without its journal is checked against it.
+    let given = match &options.source {
+        Source::File(path) => path,
+        Source::Url { dest, .. } => dest,
+    };
+    let undone = apply::recover_with(&dirs, Some(given))?;
+    if matches!(undone, Leftover::RolledBack | Leftover::Restored | Leftover::PutBack) {
+        on_event(Event::Restored(undone));
     }
     blocked_unless_empty(programs.check_install_dir(&dirs.install))?;
 
     // What was built for a half-patched install folder exists nowhere else, so nothing but
     // the patch that began there may work on it. That one goes on the immediate way: the
-    // safe way has no promise left to keep, and needs the room that was not there.
+    // safe way has no promise left to keep.
     let pinned = stage::half_patched(&dirs);
+    // The player chose the immediate way, and the drive either takes it or it does not.
+    // That is said now, before the patch file is fetched and the game files are read.
+    if options.immediate && pinned.is_none() {
+        require_drive_that_takes_immediate(&dirs, disk.file_system)?;
+    }
     let (patch, plan) = match (&pinned, &options.source) {
         (Some(id), Source::Url { url, dest }) => obtain_pinned(id, url, dest, &dirs, disk.free, stop, on_event)?,
         _ => obtain_patch(&options.source, disk.free, stop, on_event)?,
@@ -247,13 +388,18 @@ pub fn run_on_disk(
         return Err(Error::Blocked(vec![Problem::LeftoverWork { dir: dirs.work() }]));
     }
     let half_patched = pinned.is_some();
+    refuse_patch_that_deletes_the_game(programs, &plan)?;
     blocked_unless_empty(preflight::check_inside_install(&dirs.install, &apply::target_dirs(&plan, &dirs)))?;
-    if !options.immediate && !half_patched {
-        require_room_for_certain(&patch, &plan, &dirs, disk.free, on_event)?;
+    // A folder that is half patched is not turned away on what sizes say. Going on is all
+    // that helps it, and the check that is made once its files are read asks it for the
+    // least only.
+    if !half_patched {
+        let to_spare = options.immediate.then_some(disk.slack);
+        require_room_for_certain(&patch, &plan, &dirs, to_spare, disk.free, on_event)?;
     }
 
     let originals = stage::originals_to_check(&plan, &dirs.install);
-    let (volume, profile) = look_at_drive(options.storage, &originals, &dirs, disk.file_system, on_event);
+    let profile = look_at_drive(options.storage, &originals, &dirs, disk.file_system, on_event);
 
     on_event(Event::Stage(Stage::VerifyInstall));
     // Only in a half-patched install folder can a file be built while what it was built
@@ -268,19 +414,11 @@ pub fn run_on_disk(
     // to this run and may be most of what fills the drive.
     stage::discard_foreign_work(&patch, &dirs)?;
 
-    // With room for the safe way, the safe way it is: it can be undone and costs nothing
-    // more. The immediate way is for when that room is not there and the player allowed it.
-    let work = dirs.work();
-    let to_build = stage::bytes_to_build(&plan, &checked, &dirs);
-    let safe_fits = to_build == 0 || {
-        let need = SpaceNeed { dir: work.clone(), bytes: to_build };
-        preflight::check_space_with(&[need], SPACE_MARGIN, disk.free).is_empty()
-    };
-    // It begins only where a file moved over another is known to survive a power cut whole.
-    // A folder that is half patched already goes on wherever it is: stopping there helps
-    // nobody.
-    let allowed = options.immediate && !safe_fits;
-    let immediate = half_patched || (allowed && volume.takes_immediate());
+    // Which way it goes is the player's choice, made before the run, and holds for every
+    // run, whatever room the drive has. A folder that is half patched already goes on the
+    // immediate way whatever was chosen, and wherever it is: the safe way has no promise
+    // left to keep there, and stopping helps nobody.
+    let immediate = half_patched || options.immediate;
 
     let (checked, placed_early) = if immediate {
         let job = immediate::Job {
@@ -295,20 +433,29 @@ pub fn run_on_disk(
         };
         immediate::build_and_place(&job, checked, built, on_event)?
     } else {
-        require_space(&work, to_build, disk.free, on_event).map_err(|err| match err {
-            // The way that needs less room was allowed and not taken. The answer says why.
-            Error::Blocked(mut problems) if allowed => {
-                problems.push(Problem::ImmediateNeedsNtfs { file_system: volume.file_system.clone() });
-                Error::Blocked(problems)
-            }
-            other => other,
-        })?;
+        let to_build = stage::bytes_to_build(&plan, &checked, &dirs);
+        require_space(&dirs.work(), to_build, disk.free, on_event)?;
         build_all(&profile, &patch, &plan, &checked, &dirs, stop, on_event)?;
         (checked, 0)
     };
 
     let applied = apply_built(programs, &plan, &checked, &dirs, stop, on_event)?;
     Ok(Outcome { files_changed: placed_early + applied, immediate })
+}
+
+/// Refuses a patch that deletes the game's own program. No patch of the game does: a folder
+/// without that program is no folder of this client any more, which the next run, and this
+/// engine's own look at the folder, would turn away. A patch that puts a new program in the
+/// place of the old one is every other patch, and is not meant.
+fn refuse_patch_that_deletes_the_game(programs: &Programs, plan: &Plan) -> Result<()> {
+    let game = plan::name_key(programs.game);
+    let deletes_it = |entry: &&plan::Entry| {
+        entry.action == plan::Action::Delete && !plan::names_folder(&entry.name) && plan::name_key(&entry.name) == game
+    };
+    match plan.entries.iter().find(deletes_it) {
+        Some(entry) => Err(Error::UnknownForm(format!("the patch deletes {}, the game's own program", entry.name))),
+        None => Ok(()),
+    }
 }
 
 /// Opens the patch file a run was given, downloading it first if it was given as an address.
@@ -422,24 +569,36 @@ fn open_patch(path: &Path, stop: &AtomicBool, on_event: &mut (dyn FnMut(Event) +
     Ok((patch, plan))
 }
 
-/// Stops the run, before any game file is read, when it is already certain that the new
-/// files cannot fit. Checking the game files takes minutes on a hard disk, and the answer
-/// after it would be the same. Says nothing when they may fit: the exact check follows.
+/// Stops the run, before any game file is read, when it is already certain that the drive
+/// has not the room for the way the run goes. Checking the game files takes minutes on a
+/// hard disk, and the answer after it would be the same. Says nothing when the room may be
+/// there: the exact check follows.
+///
+/// `to_spare` is for the immediate way, the room it asks for beyond the least it can work
+/// with. `None` is the safe way.
 fn require_room_for_certain(
     patch: &PatchFile,
     plan: &Plan,
     dirs: &Dirs,
+    to_spare: Option<u64>,
     free: &dyn Fn(&Path) -> io::Result<u64>,
     on_event: &mut (dyn FnMut(Event) + Send),
 ) -> Result<()> {
     let work = dirs.work();
-    let ours = stage::staged_is_ours(patch, dirs);
     // Work of another patch is thrown away before the exact check. How much room that
     // gives back is not known here, so nothing is certain.
+    let ours = stage::staged_is_ours(patch, dirs);
     if !ours && preflight::holds_work(&work) {
         return Ok(());
     }
-    let bytes = stage::bytes_certain_to_build(plan, dirs, ours);
+    // What a run of this patch was still writing when it was cut off is no file of
+    // anyone's. It goes before the room is looked at: on a drive with little room, the
+    // room it takes would be counted as missing.
+    if ours {
+        stage::remove_unfinished(dirs);
+    }
+    let (safe, immediate) = room_by_sizes(patch, plan, dirs, to_spare.unwrap_or(0));
+    let bytes = if to_spare.is_some() { immediate } else { safe };
     let need = SpaceNeed { dir: work.clone(), bytes };
     if bytes == 0 || preflight::check_space_with(&[need], SPACE_MARGIN, free).is_empty() {
         return Ok(());
@@ -455,7 +614,7 @@ fn look_at_drive(
     dirs: &Dirs,
     pretended: Option<&str>,
     on_event: &mut (dyn FnMut(Event) + Send),
-) -> (Volume, Profile) {
+) -> Profile {
     // The largest original stands for the drive: reads far apart in it show how long the
     // drive takes to get from one place to another.
     let sample = originals
@@ -476,7 +635,84 @@ fn look_at_drive(
         checkers: profile.checkers,
         unbuffered: profile.unbuffered,
     });
-    (volume, profile)
+    profile
+}
+
+/// Stops a run for which the immediate way was chosen on a drive where that way is not
+/// begun: one that is not NTFS, where it is not known that a file moved over another
+/// survives a power cut whole. A file system that is `pretended` takes the place of the
+/// one found.
+///
+/// The run is not sent the safe way in its place. The player chose, and a run that goes
+/// another way than was chosen would say nothing of it until it stood refused for room, or
+/// was through.
+fn require_drive_that_takes_immediate(dirs: &Dirs, pretended: Option<&str>) -> Result<()> {
+    let mut volume = storage::look(&dirs.install, None);
+    if let Some(pretended) = pretended {
+        volume.file_system = pretended.to_owned();
+    }
+    if volume.takes_immediate() {
+        return Ok(());
+    }
+    Err(Error::Blocked(vec![Problem::ImmediateNeedsNtfs { file_system: volume.file_system }]))
+}
+
+/// What each way of patching asks the drive of the install folder to have free before it
+/// builds anything, the margin that has to stay free included. Zero where there is nothing
+/// to build. These are the figures a run reports in [`Event::Space`] and, where the drive
+/// has less, in [`Problem::NotEnoughSpace`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Room {
+    /// For the safe way: every new file that is still to be built, next to the files it
+    /// takes the place of.
+    pub safe: u64,
+    /// For the immediate way: the most it has standing next to the files of the folder at
+    /// any one moment, and a little to spare so that it does not build one file at a time.
+    /// Never more than `safe`.
+    pub immediate: u64,
+}
+
+impl Room {
+    /// The room that a run asks for. `chosen` is [`Options::immediate`]; a folder that is
+    /// `half_patched` (see [`half_patched`]) goes the immediate way whatever was chosen.
+    pub fn of_run(&self, chosen: bool, half_patched: bool) -> u64 {
+        if chosen || half_patched { self.immediate } else { self.safe }
+    }
+}
+
+/// Works out what a run of this patch on this install folder will ask the drive to have
+/// free, for either way of patching, without running anything: see [`Room`].
+///
+/// It is told from the patch file, which says how long every new file is, and from the
+/// sizes of the files in the folder. No file of the game is read and nothing is changed, so
+/// this is quick, and can be asked before the player starts the patch. What it needs is
+/// the patch file on this PC: before that is fetched, nothing knows how long the new files
+/// are.
+///
+/// A file that has the size of its new version is taken for that version, as it is when a
+/// run that was paused has put it there or built it. Where such a file is in truth still
+/// the old one, the run finds out when it reads it and asks for that much more: the figure
+/// here is then short by the length of that file, and never too high. Where a file of that
+/// size is in place and another waits among the files this patch has built, the built one
+/// is taken for the new version, and the one in place for the file it is there to replace.
+pub fn room_needed(patch: &PatchFile, plan: &Plan, install_dir: &Path) -> Room {
+    let dirs = Dirs::new(install_dir);
+    // A folder that is half patched is asked for the least only: see `immediate`.
+    let to_spare = if stage::half_patched(&dirs).is_some() { 0 } else { immediate::SLACK };
+    let (safe, immediate) = room_by_sizes(patch, plan, &dirs, to_spare);
+    let with_margin = |bytes: u64| if bytes == 0 { 0 } else { bytes.saturating_add(SPACE_MARGIN) };
+    Room { safe: with_margin(safe), immediate: with_margin(immediate) }
+}
+
+/// The bytes each way of patching is certain to need room for, told from the sizes of files
+/// alone: for the safe way, and for the immediate way with `to_spare` on top of its least.
+/// This is what a run goes by before it has read the game files, and what is told of a
+/// patch without a run. A file that has the size of its new version counts as that version.
+fn room_by_sizes(patch: &PatchFile, plan: &Plan, dirs: &Dirs, to_spare: u64) -> (u64, u64) {
+    let ours = stage::staged_is_ours(patch, dirs);
+    let (in_place, built) = stage::told_by_sizes(plan, dirs, ours);
+    let safe = stage::bytes_certain_to_build(plan, dirs, ours);
+    (safe, immediate::room_to_start(plan, &in_place, &built, &dirs.install, to_spare))
 }
 
 /// Checks the game files against what the patch was made for, reporting each file once and

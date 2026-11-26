@@ -272,8 +272,11 @@ fn copies_reach_the_last_byte_of_files_of_any_size() {
 
 #[test]
 fn copy_that_runs_past_the_end_of_an_original_fails_and_leaves_nothing() {
-    // An original that is shorter than a copy needs is not the file the patch was made
-    // for. The run has to end with a read error, as it always did; not hang, not build.
+    // A copy that needs more than its original has. If the original is the very file the
+    // patch was made for, the patch is at fault, and the check of the originals says so
+    // before anything is built. If the original got shorter after it was checked, it is
+    // the build that runs into its end: that has to end with a read error, as it always
+    // did; not hang, not build.
     let size = 10_000usize;
     let bad_copies: [(usize, usize); 6] = [
         (9_000, 2_000),  // starts inside, runs past
@@ -286,15 +289,34 @@ fn copy_that_runs_past_the_end_of_an_original_fails_and_leaves_nothing() {
     for (start, len) in bad_copies {
         for (before, after) in [(0, 0), (300, 300), (1, 2000)] {
             let what = format!("copy of {len} at {start} after {before} and before {after} good ones");
-            let mut case = Case::new(Layout::Table, vec![(r"Data\A.wz", Rng::new(47).bytes(size))]);
-            // A whole file that is finished before the rebuild fails.
-            case.create(r"Data\Fresh.wz", b"finished before the rebuild fails".to_vec());
-            let mut ops: Vec<Op> = (0..before).map(|_| copy(r"Data\A.wz", 0, 100)).collect();
-            ops.push(copy(r"Data\A.wz", start, len));
-            ops.extend((0..after).map(|_| copy(r"Data\A.wz", 0, 100)));
-            case.rebuild_claiming(r"Data\A.wz", &ops, b"whatever the patch claims");
+            // The original with every byte the copy asks for, of which the first `size` are
+            // the original that is too short for it.
+            let whole = Rng::new(47).bytes(start + len);
+            let add_entries = |case: &mut Case| {
+                // A whole file that is finished before the rebuild fails.
+                case.create(r"Data\Fresh.wz", b"finished before the rebuild fails".to_vec());
+                let mut ops: Vec<Op> = (0..before).map(|_| copy(r"Data\A.wz", 0, 100)).collect();
+                ops.push(copy(r"Data\A.wz", start, len));
+                ops.extend((0..after).map(|_| copy(r"Data\A.wz", 0, 100)));
+                case.rebuild_claiming(r"Data\A.wz", &ops, b"whatever the patch claims");
+            };
 
+            // A patch that asks this of an original that never was any longer: it lies.
+            let mut lying = Case::new(Layout::Table, vec![(r"Data\A.wz", whole[..size].to_vec())]);
+            add_entries(&mut lying);
+            fs::write(&lying.patch, lying.builder.bytes()).unwrap();
+            let plan = plan::scan(&PatchFile::open(&lying.patch).unwrap(), &GO).unwrap();
+            let err = stage::check_originals(&plan, &lying.install, &GO, &|_, _| {}).unwrap_err();
+            assert!(matches!(err, Error::CorruptPatch(_)), "{what}: unexpected error: {err}");
+            lying.assert_install_untouched(&what);
+
+            // A patch that asks it of an original that has those bytes, and loses them once
+            // it has been checked.
+            let mut case = Case::new(Layout::Table, vec![(r"Data\A.wz", whole.clone())]);
+            add_entries(&mut case);
             let opened = Arc::new(case.open());
+            let original = on_disk(&case.install, r"Data\A.wz");
+            fs::write(&original, &whole[..size]).unwrap();
             let staging = opened.clone();
             let err = must_finish(&what, move || staging.stage()).unwrap_err();
             let Error::Io { what: action, source } = &err else { panic!("{what}: unexpected error: {err}") };
@@ -304,6 +326,10 @@ fn copy_that_runs_past_the_end_of_an_original_fails_and_leaves_nothing() {
             case.assert_staged(&opened.dirs, true, &what);
             assert!(!opened.dirs.staged().join("Data/A.wz").exists(), "{what}: the file was staged");
             assert!(unfinished(&opened.dirs).is_empty(), "{what}: {:?} left behind", unfinished(&opened.dirs));
+            // The original is as the test cut it down, and with that put right the install
+            // is as it was.
+            assert!(fs::read(&original).unwrap() == whole[..size], "{what}: the original was changed");
+            fs::write(&original, &whole).unwrap();
             case.assert_install_untouched(&what);
         }
     }

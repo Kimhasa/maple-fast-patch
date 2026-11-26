@@ -87,6 +87,9 @@ pub fn stage_with(
     stop: &AtomicBool,
     on_progress: &mut dyn FnMut(&str, u64, bool),
 ) -> Result<()> {
+    // Everything that is built is written into the work folder, which is looked at once
+    // more before that begins: it must not have become a way out of the install folder.
+    crate::apply::guard_work(dirs)?;
     prepare_work(patch, dirs)?;
     // Whatever an earlier run was still writing when it was cut off is not a finished file.
     remove_unfinished(dirs);
@@ -316,12 +319,12 @@ impl Builder<'_> {
                         return Err(plan::changed());
                     }
                     if !checked.builds(entry) {
-                        skip_ops(&mut stream, layout, &name)?;
+                        skip_ops(&mut stream, layout, &name, stop)?;
                         on_progress(&name, *new_len);
                         continue;
                     }
                     if self.kept.contains(&name) {
-                        skip_ops(&mut stream, layout, &name)?;
+                        skip_ops(&mut stream, layout, &name, stop)?;
                         continue;
                     }
                     let building = (!trial).then(|| self.dirs.building(index));
@@ -362,8 +365,11 @@ fn discard_unless_built(building: Option<&Path>, built: Result<()>) -> Result<()
     built
 }
 
-fn skip_ops(stream: &mut PatchStream, layout: Layout, name: &str) -> Result<()> {
+/// Passes over the instructions of a rebuild that is not built now. A pause is looked for at
+/// every one of them: an entry can hold as many as the patch file has room for.
+fn skip_ops(stream: &mut PatchStream, layout: Layout, name: &str, stop: &AtomicBool) -> Result<()> {
     plan::read_ops(stream, layout, name, |op, stream| match op {
+        _ if stop.load(Ordering::Relaxed) => Err(Error::Stopped),
         Op::Literal { len } => stream.skip(len),
         Op::Fill { .. } | Op::Copy { .. } => Ok(()),
     })

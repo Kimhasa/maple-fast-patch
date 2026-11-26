@@ -1,7 +1,7 @@
 //! What is in the install folder before a run changes it: the fingerprints of its files, and
 //! whether the originals are the files the patch was made for.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
@@ -96,7 +96,8 @@ pub fn files_present(names: impl IntoIterator<Item = String>, root: &Path) -> Ve
 }
 
 /// Confirms that every original file a rebuild copies from is exactly the file the patch was
-/// made for. Reports all files that differ, not only the first. `on_progress` hears, from
+/// made for. Reports all files that differ, not only the first. Where they are all the right
+/// files and a copy reads past the end of one, it is the patch that is refused. `on_progress` hears, from
 /// whichever thread is reading, which file is being read and how many more bytes of it were.
 pub fn check_originals(
     plan: &Plan,
@@ -140,20 +141,25 @@ pub fn check_originals_with(
 
     let mut checked = Checked::default();
     let mut differing = BTreeSet::new();
-    // Folders and files that entries so far delete, as name keys.
-    let mut deleted: Vec<(String, bool)> = Vec::new();
+    // The first original that is the right file and is shorter than a copy from it needs.
+    let mut lies_about = None;
+    // What the entries so far delete, as name keys: everything they name, and of that the
+    // folders.
+    let (mut deleted, mut deleted_folders) = (HashSet::new(), HashSet::new());
     for entry in &plan.entries {
         let key = plan::name_key(&entry.name);
         if entry.action == Action::Delete {
-            deleted.push((key, plan::names_folder(&entry.name)));
+            if plan::names_folder(&entry.name) {
+                deleted_folders.insert(key.clone());
+            }
+            deleted.insert(key);
             continue;
         }
         // A file that already is the new version needs no work. Unless an earlier entry
         // deletes it, or the folder it is in: then it is gone by the time this entry's turn
         // comes, and has to be put there again.
-        let removed_first = deleted.iter().any(|(gone, folder)| {
-            key.strip_prefix(gone.as_str()).is_some_and(|rest| rest.is_empty() || (*folder && rest.starts_with('\\')))
-        });
+        let removed_first =
+            deleted.contains(&key) || plan::folders_above(&key).any(|above| deleted_folders.contains(above));
         let in_place =
             !removed_first && found.get(&entry.name).is_some_and(|print| Some(*print) == Fingerprint::promised(entry));
         if let Action::Create { .. } = entry.action {
@@ -179,13 +185,30 @@ pub fn check_originals_with(
             let Some(expected) = expected else {
                 return Err(Error::corrupt(format!("no original checksum for {source}")));
             };
-            if found.get(source).map(|f| f.crc) != Some(expected) {
-                differing.insert(source.clone());
+            match found.get(source) {
+                // This is the very file the patch was made for. A copy that reads past its
+                // end asks for bytes that file never had: the patch is at fault, not the disk.
+                Some(print) if print.crc == expected => {
+                    if lies_about.is_none() && plan.reach.get(source).is_some_and(|reach| *reach > print.len) {
+                        lies_about = Some(source);
+                    }
+                }
+                _ => {
+                    differing.insert(source.clone());
+                }
             }
         }
     }
 
-    if differing.is_empty() { Ok(checked) } else { Err(Error::OriginalMismatch(differing.into_iter().collect())) }
+    // Files that differ come first: with them in the folder there is no telling yet what
+    // the patch would make of the right ones.
+    if !differing.is_empty() {
+        return Err(Error::OriginalMismatch(differing.into_iter().collect()));
+    }
+    match lies_about {
+        Some(source) => Err(Error::corrupt(format!("a copy reads past the end of {source}"))),
+        None => Ok(checked),
+    }
 }
 
 /// Fingerprints several files under `root`, `checkers` of them at a time. Reading is the slow

@@ -8,6 +8,8 @@ use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use crate::apply;
+use crate::stage::Dirs;
 #[cfg(windows)]
 use crate::wide::{from_wide, to_wide};
 
@@ -65,10 +67,24 @@ pub enum Problem {
     OutsideInstall { dir: PathBuf },
     /// An earlier run stopped partway and left its work folder behind.
     LeftoverWork { dir: PathBuf },
-    /// The new files do not fit next to the old ones, the player allowed the immediate way
-    /// (see [`crate::immediate`]), and it was not taken because the drive is not NTFS: on
-    /// `file_system` it is not known that a file moved over another survives a power cut
-    /// whole. Comes after the `NotEnoughSpace` that it explains.
+    /// An earlier run was cut off while it applied, and what that apply did cannot be
+    /// undone. The journal that says how far it had come cannot be read, or is gone: a line
+    /// of it is not one this version writes, or names a place outside the install folder,
+    /// or the file is not text. And the folder could not be put back without the journal
+    /// either, from what the apply had moved aside: see [`crate::run::recover`] for when
+    /// that is so. Nothing may go on over such a folder. `dir` is the work folder;
+    /// `detail` says what could not be read and why the folder could not be put back, for
+    /// a log.
+    ///
+    /// The install folder may be a mix of old and new files. It stays like that until the
+    /// work folder is removed by [`crate::run::discard_work_as_it_is`], which says what is
+    /// then left.
+    UnreadableJournal { dir: PathBuf, detail: String },
+    /// The player chose the immediate way (see [`crate::immediate`]), and it is not begun
+    /// on this drive because the drive is not NTFS: on `file_system` it is not known that a
+    /// file moved over another survives a power cut whole. The run is refused for this
+    /// alone, before anything is fetched or read. It is not sent the safe way: that would
+    /// be another way than the one chosen.
     ImmediateNeedsNtfs { file_system: String },
 }
 
@@ -332,8 +348,26 @@ pub(crate) fn check_inside_install(install: &Path, dirs: &[PathBuf]) -> Vec<Prob
 }
 
 /// Reports the work folder of an earlier run that did not finish.
+///
+/// Where that run was cut off while applying and cannot be undone, that is what is
+/// reported, as [`Problem::UnreadableJournal`], and nothing else: such a folder holds no
+/// work that a run could go on with.
+///
+/// A journal that cannot be read does not make a folder one of those. Such a folder is put
+/// back from what the apply moved aside, by [`crate::run::recover`] and by the start of a
+/// run, and whether that works shows only when it is tried. So this reports it once it was
+/// tried and could not be done, and before that only where it is certain without trying:
+/// what was moved aside carries no names, because an earlier version moved it. A folder
+/// that has not been tried yet is reported as work that is left, like one whose journal can
+/// be read. Whoever wants the answer to be final asks [`crate::run::recover`] first.
+///
+/// Nothing is changed by looking.
 pub fn check_leftovers(install_dir: &Path) -> Vec<Problem> {
-    let dir = install_dir.join(WORK_DIR_NAME);
+    let dirs = Dirs::new(install_dir);
+    if let Some(unreadable) = apply::unreadable_journal(&dirs) {
+        return vec![unreadable];
+    }
+    let dir = dirs.work();
     if holds_work(&dir) { vec![Problem::LeftoverWork { dir }] } else { Vec::new() }
 }
 

@@ -6,6 +6,7 @@
 //! page that has stopped has none: what the desk does goes on whatever becomes of either.
 //! The rules it goes by are in [`crate::flow`], and what the screen says in [`crate::shown`].
 
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -17,8 +18,8 @@ use crate::flow::{Decision, Flow, Phase, Progress, RefusalKind, Run, World, calm
 use crate::game::start_game;
 use crate::maintenance::{Lamp, own_delay};
 use crate::offer::availability;
-use crate::patching::begin;
-use crate::ready::look;
+use crate::patching::{Wanted, begin};
+use crate::ready::{heal_begins, look, put_back, read_begins, read_patch};
 use crate::settings::Settings;
 use crate::shown::{Button, Row, shown};
 use crate::state::{Patcher, Site, Status};
@@ -40,12 +41,17 @@ pub(crate) struct SiteView {
     title: &'static str,
     current: Option<String>,
     latest: Option<String>,
+    /// The address the user is given to begin from when they state where the patch is.
+    patch_address: String,
     /// When the server last answered a check, in milliseconds since 1970.
     checked_at: Option<u64>,
     lamp: Option<Lamp>,
     rows: Vec<Row>,
     custom_dir: bool,
     half_patched: bool,
+    /// Removing what a run left cannot be made good by this app: the folder is partly new,
+    /// or the record of an apply that was cut off cannot be read. The user is asked first.
+    discard_asks: bool,
     phase: Phase,
     run: Option<Run>,
     percent: Option<f64>,
@@ -123,12 +129,16 @@ pub(crate) struct Outside {
 pub(crate) fn outside(patcher: &Patcher, site: &Site) -> Outside {
     let settings = *patcher.settings.lock().unwrap();
     let told = site.told.lock().unwrap().clone();
+    // Whether the app's home was asked is read before what it said: once it was asked, its
+    // word is in place (see `watch_updates`), and is not read as it was a moment before.
+    let update_asked = patcher.update_asked.load(Ordering::SeqCst);
     let world = World {
         auto_patch: settings.auto_patch,
         auto_start: settings.auto_start,
         outdated: patcher.update.lock().unwrap().as_ref().is_some_and(|update| update.required),
         run_at_work: patcher.running().is_some(),
         open: told.open,
+        update_asked,
         now: Instant::now(),
     };
     Outside { world, lamp: told.lamp, locked: patcher.holding(site).map(|other| other.client.server.key()) }
@@ -148,12 +158,14 @@ fn site_view(site: &Site, flow: &Flow, outside: &Outside) -> SiteView {
         rev: flow.rev,
         title: site.client.title,
         current: shown.current,
-        latest: flow.latest.clone(),
+        latest: shown.latest,
+        patch_address: shown.address,
         checked_at: flow.checked_at,
         lamp: outside.lamp.clone(),
         rows: shown.rows,
         custom_dir: flow.status.as_ref().is_some_and(|status| status.custom_dir),
         half_patched: flow.status.as_ref().is_some_and(|status| status.half_patched),
+        discard_asks: flow.status.as_ref().is_some_and(Status::discard_asks),
         phase: flow.phase,
         run: flow.run.clone(),
         percent: shown.percent,
@@ -199,7 +211,7 @@ pub(crate) fn dismiss_run(app: AppHandle, patcher: State<Patcher>, server: Strin
 /// the moment at which what is known must not be a few seconds old.
 pub(crate) fn look_now(app: &AppHandle, patcher: &Patcher, site: &Site) -> Status {
     let _one_at_a_time = site.looking.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let status = look(site, patcher.running_for(site));
+    let status = look(site, patcher.running_for(site), patcher.settings.lock().unwrap().immediate);
     update(app, patcher, site, |flow| {
         if flow.take_look(status.clone(), Instant::now()) {
             // What was found for the folder before is of no use here, and a check that is
@@ -307,6 +319,8 @@ fn round(app: &AppHandle, patcher: &Patcher, place: usize) {
     if looks {
         look_now(app, patcher, site);
     }
+    heal_if_due(app, patcher, place);
+    read_patch_if_due(app, patcher, place);
     let begins = {
         let mut flow = site.flow.lock().unwrap();
         let due = flow.check_is_due(Instant::now(), patcher.running().is_some());
@@ -327,6 +341,58 @@ fn round(app: &AppHandle, patcher: &Patcher, place: usize) {
     act(app, patcher, site);
     let outside = outside(patcher, site);
     tell(app, site, &mut site.flow.lock().unwrap(), &outside);
+}
+
+/// Has the folder of the site at `place` put back, when an apply was cut off in it and an
+/// attempt is due; see [`heal_begins`]. That comes before anything is said of the folder.
+///
+/// It is done on a thread of its own. Without the record of the apply it takes as long as
+/// a check of the game files, and the desk goes on meanwhile: the looks find the folder
+/// being put back, and the screen says that this is waited for. A window that is closed
+/// meanwhile closes: every move brings the folder nearer to what it was, and the next
+/// start of the app carries on from wherever this one came to.
+fn heal_if_due(app: &AppHandle, patcher: &Patcher, place: usize) {
+    let site = &patcher.sites[place];
+    // Only a folder the last look found to be in that state is looked into for it.
+    let seen = site.flow.lock().unwrap().status.as_ref().and_then(Status::to_put_back).map(PathBuf::from);
+    let Some(install) = seen else { return };
+    if !heal_begins(site, &install, patcher.running_for(site), Instant::now()) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let patcher = app.state::<Patcher>();
+        let site = &patcher.sites[place];
+        put_back(site, &install);
+        // The folder is another one from here on: it is looked at and asked about at once.
+        look_now(&app, &patcher, site);
+        update(&app, &patcher, site, |flow| flow.ask_again(Instant::now()));
+    });
+}
+
+/// Has what the patch file on this PC does read, when the last look found one that has not
+/// been read; see [`read_patch`]. The line for the room then says what a run of it needs,
+/// by the way of patching that is chosen.
+///
+/// It is done on a thread of its own, since the whole file is read once, and not beside a
+/// run, which reads the same file and has the drive to itself.
+fn read_patch_if_due(app: &AppHandle, patcher: &Patcher, place: usize) {
+    let site = &patcher.sites[place];
+    if patcher.running().is_some() {
+        return;
+    }
+    let unread = site.flow.lock().unwrap().status.as_ref().and_then(|status| status.unread_patch.clone());
+    let Some(file) = unread.map(PathBuf::from) else { return };
+    if !read_begins(site, &file) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let patcher = app.state::<Patcher>();
+        let site = &patcher.sites[place];
+        read_patch(site, &file);
+        look_now(&app, &patcher, site);
+    });
 }
 
 /// Does what the app does by itself for `site` now, if anything; see [`decide`].
@@ -359,8 +425,8 @@ fn act(app: &AppHandle, patcher: &Patcher, site: &Site) {
                 }
                 return;
             }
-            Decision::StartPatch { file } => {
-                if let Err(refusal) = begin(app, patcher, site, file) {
+            Decision::StartPatch => {
+                if let Err(refusal) = begin(app, patcher, site, Wanted::Offered) {
                     // Something in the way shows on the screen, and the patch starts when it
                     // is gone. Anything else would be met again every second: the patch is
                     // left to the user.
@@ -385,12 +451,20 @@ mod tests {
     use super::*;
     use crate::flow::{Refusal, RunEnd, pick};
     use crate::harness::StandIns;
-    use crate::made::{game_at, patch_to};
+    use crate::made::{errored, game_at, game_open, no_game_at, no_install, patch_to, resumable, up_to_date};
     use crate::offer::{CheckEnd, Checked};
-    use crate::state::Step;
+    use crate::state::{Availability, Step};
 
     fn world(now: Instant) -> World {
-        World { auto_patch: false, auto_start: false, outdated: false, run_at_work: false, open: Some(true), now }
+        World {
+            auto_patch: false,
+            auto_start: false,
+            outdated: false,
+            run_at_work: false,
+            open: Some(true),
+            update_asked: true,
+            now,
+        }
     }
 
     /// What is outside a site at `now` with nothing going on around it.
@@ -439,11 +513,13 @@ mod tests {
             "title",
             "current",
             "latest",
+            "patchAddress",
             "checkedAt",
             "lamp",
             "rows",
             "customDir",
             "halfPatched",
+            "discardAsks",
             "phase",
             "run",
             "percent",
@@ -463,20 +539,20 @@ mod tests {
         for nothing in ["run", "summary", "locked", "lamp"] {
             assert_eq!(view[nothing], Value::Null, "{nothing}");
         }
-        assert_eq!((&view["status"], &view["percent"]), (&json!("새 패치 있음"), &json!(0.0)));
+        assert_eq!((&view["status"], &view["percent"]), (&json!("새 클라이언트 패치 있음"), &json!(0.0)));
         assert_eq!((&view["statusBad"], &view["busy"]), (&json!(false), &json!(false)));
         assert_eq!((&view["customDir"], &view["halfPatched"]), (&json!(false), &json!(false)));
         let folder =
             json!({ "kind": "folder", "label": "설치 경로", "ok": true, "detail": r"C:\Games\Maple", "message": "" });
-        let patch =
-            json!({ "kind": "patchFile", "label": "패치 파일", "ok": true, "detail": "1,229 MB", "message": "" });
+        let patch = json!({ "kind": "patchFile", "label": "패치 파일", "ok": true, "detail": "00421to00422.patch · 1,229 MB", "message": "" });
+        assert_eq!(view["patchAddress"], json!("https://maplestory.dn.nexoncdn.co.kr/Patch/00422/00421to00422.patch"));
         let rows = view["rows"].as_array().expect("the lines of the ready screen");
         assert_eq!((rows.first(), rows.last()), (Some(&folder), Some(&patch)));
         assert_eq!(view["button"], json!({ "kind": "download", "enabled": true, "primary": true }));
 
         // With a run on the screen that failed: the run, and what its dialog says once.
         begin_run(&mut flow, now);
-        flow.hear(said(40.0, Step::VerifyInstall, "게임 파일 검사 중", 1, "검사중: Map001.wz"), now);
+        flow.hear(said(40.0, Step::VerifyInstall, "게임 파일 검사 중", 1, "검사 중: Map001.wz"), now);
         let (message, details) = ("새 게임 파일 검사에 실패했습니다.".to_owned(), vec!["Map001.wz".to_owned()]);
         flow.end(RunEnd::Failed { message, details }, now);
         let view = serde_json::to_value(site_view(&site, &flow, &seen(now))).unwrap();
@@ -490,12 +566,13 @@ mod tests {
             "source": null,
             "label": "1.2.422",
             "leaving": false,
+            "asking": false,
             "percent": 40.0,
             "step": "verifyInstall",
             "done": 1,
             "total": 8,
             "worked": 1,
-            "activity": "검사중: Map001.wz",
+            "activity": "검사 중: Map001.wz",
             "failure": failure,
         });
         assert_eq!((&view["phase"], &view["run"]), (&json!("failed"), &run));
@@ -509,10 +586,10 @@ mod tests {
         let mut flow = site.flow.lock().unwrap();
         begin_run(&mut flow, now);
         let told = |flow: &Flow, outside: &Outside| site_view(&site, flow, outside).steady();
-        flow.hear(said(10.0, Step::Download, "패치 파일 다운로드 중", 2, "다운로드중: 00421to00422.patch"), now);
+        flow.hear(said(10.0, Step::Download, "패치 파일 다운로드 중", 2, "다운로드 중: 00421to00422.patch"), now);
         let downloading = told(&flow, &seen(now));
         // The figures and the file it is on reach the page as the run says them.
-        flow.hear(said(20.0, Step::Download, "패치 파일 다운로드 중", 5, "다운로드중: 00421to00422.patch"), now);
+        flow.hear(said(20.0, Step::Download, "패치 파일 다운로드 중", 5, "다운로드 중: 00421to00422.patch"), now);
         assert_eq!(told(&flow, &seen(now)), downloading);
         // A download that has gone quiet is another word in the footer.
         assert_ne!(told(&flow, &seen(now + Duration::from_secs(5))), downloading);
@@ -534,7 +611,7 @@ mod tests {
 
     #[test]
     fn a_run_says_where_it_is_and_the_app_what_is_not_of_one_client_under_the_pages_names() {
-        let progress = said(12.5, Step::Download, "패치 파일 다운로드 중", 1, "다운로드중: 00421to00422.patch");
+        let progress = said(12.5, Step::Download, "패치 파일 다운로드 중", 1, "다운로드 중: 00421to00422.patch");
         let word = serde_json::to_value(ProgressWord { server: "live", progress }).unwrap();
         let expected = json!({
             "server": "live",
@@ -544,7 +621,7 @@ mod tests {
             "done": 1,
             "total": 8,
             "worked": 1,
-            "activity": "다운로드중: 00421to00422.patch",
+            "activity": "다운로드 중: 00421to00422.patch",
         });
         assert_eq!(word, expected);
 
@@ -565,8 +642,14 @@ mod tests {
             (RefusalKind::Busy, "busy"),
             (RefusalKind::Outdated, "outdated"),
             (RefusalKind::Nothing, "nothing"),
-            (RefusalKind::NotPatch, "notPatch"),
+            (RefusalKind::Address, "address"),
+            (RefusalKind::Ask, "ask"),
         ];
+        // An address the app cannot vouch for: the one message is the question.
+        let question = "메이플스토리 패치 주소가 아닙니다.\n이 주소로 패치하시겠습니까?";
+        let asked = json!({ "kind": "ask", "messages": [question] });
+        let refusal = Refusal::new(RefusalKind::Ask, &crate::wording::asks_about_address("메이플스토리"));
+        assert_eq!(serde_json::to_value(refusal).unwrap(), asked);
         for (kind, name) in kinds {
             assert_eq!(serde_json::to_value(kind).unwrap(), json!(name));
         }
@@ -593,5 +676,102 @@ mod tests {
         assert!(patcher.begin_run(test));
         assert_eq!((locked(live), locked(test)), (json!("test"), Value::Null));
         assert_eq!(serde_json::to_value(app_word(&patcher)).unwrap()["running"], json!("test"));
+    }
+
+    /// Something that becomes of a site, as its desk, a check or a run brings it about.
+    type Event = Box<dyn Fn(&mut Flow, Instant)>;
+
+    fn event(does: impl Fn(&mut Flow, Instant) + 'static) -> Event {
+        Box::new(does)
+    }
+
+    /// A look at the folder that finds `status`.
+    fn look(status: fn() -> Status) -> Event {
+        event(move |flow, now| {
+            flow.take_look(status(), now);
+        })
+    }
+
+    /// A check that ends as `end` with `answer`, begun for the folder the site has, or
+    /// with `stale` for the one it had before.
+    fn check(answer: fn() -> Availability, end: CheckEnd, stale: bool) -> Event {
+        event(move |flow, now| {
+            let epoch = if stale { flow.folder_epoch.wrapping_sub(1) } else { flow.folder_epoch };
+            flow.take_answer(epoch, Checked { answer: answer(), end }, Some(true), now, 1_795_000_000_000, &|_| 0);
+        })
+    }
+
+    /// How many of [`events`] are looks at the folder. They come first.
+    const LOOKS: usize = 6;
+
+    /// Everything that changes what a site knows of the newest version or of its answer.
+    fn events() -> Vec<Event> {
+        const HERE: &str = r"C:\Games\Maple";
+        vec![
+            look(|| game_at(HERE)),
+            look(|| game_at(r"D:\Copy\Maple")),
+            look(|| game_open(game_at(HERE))),
+            look(no_install),
+            look(|| no_game_at(HERE)),
+            look(|| resumable(game_at(HERE), None, Some(12.5))),
+            check(|| up_to_date("1.2.421"), CheckEnd::Answered, false),
+            check(|| up_to_date("1.2.421"), CheckEnd::Answered, true),
+            check(|| up_to_date("1.2.421"), CheckEnd::Stopped, false),
+            check(|| patch_to("1.2.422"), CheckEnd::Answered, false),
+            check(|| errored("서버 요청 실패"), CheckEnd::Failed, false),
+            check(
+                || Availability { latest: Some("1.2.421".to_owned()), ..errored("패치 확인 불가") },
+                CheckEnd::Failed,
+                false,
+            ),
+            check(Availability::nothing, CheckEnd::Answered, false),
+            event(|flow, now| flow.ask_again(now)),
+            event(|flow, now| flow.leftovers_discarded(true, now)),
+            event(|flow, now| {
+                if let Ok(picked) = pick(&flow.facts(&world(now)), None, flow.left()) {
+                    flow.begin(&picked, now);
+                    flow.at_work();
+                }
+            }),
+            event(|flow, now| flow.end(RunEnd::Done { seconds: 60, files: 10 }, now)),
+            event(|flow, now| flow.end(RunEnd::Stopped, now)),
+            event(|flow, _| flow.dismiss()),
+        ]
+    }
+
+    /// The page names the newest version on one line and says in its footer whether the
+    /// install is at it. Whatever becomes of a site, and in whatever order, the footer
+    /// never says that the install is up to date under a line with no version to name.
+    ///
+    /// Every order of up to four things that can become of a site is gone through, the
+    /// first of them a look: nothing is asked or begun before one. What the site keeps is
+    /// of one moment throughout: an answer that names the newest version is never kept
+    /// without that version. The screen would hold even if it were not, since the footer
+    /// goes by the version the page has to show.
+    #[test]
+    fn the_footer_never_calls_the_install_up_to_date_over_a_page_with_no_newest_version() {
+        let now = Instant::now();
+        let site = Site::new(&mfp_kms::LIVE, PathBuf::from("data"), StandIns::default());
+        let events = events();
+        for length in 1..=4u32 {
+            for order in 0..LOOKS * events.len().pow(length - 1) {
+                let mut picks = vec![order % LOOKS];
+                let mut rest = order / LOOKS;
+                for _ in 1..length {
+                    picks.push(rest % events.len());
+                    rest /= events.len();
+                }
+                let mut flow = Flow::new(now);
+                picks.iter().for_each(|&at| events[at](&mut flow, now));
+
+                let names = flow.answer.as_ref().is_some_and(|answer| answer.latest.is_some());
+                assert!(!names || flow.latest.is_some(), "an answer without its newest version after {picks:?}");
+                let view = site_view(&site, &flow, &seen(now));
+                // The figure follows the footer: it is at its end when the footer says so.
+                let figure_full = view.phase == Phase::Ready && view.percent == Some(100.0);
+                assert_eq!(view.status == "최신 버전", figure_full, "after {picks:?}");
+                assert!(!figure_full || view.latest.is_some(), "up to date with no newest version after {picks:?}");
+            }
+        }
     }
 }

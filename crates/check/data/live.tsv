@@ -1,0 +1,1221 @@
+# What the files of a client are after each patch. Written by the known_files program of
+# mfp-tools from Nexon's patch files; not to be changed by hand.
+client live
+state 420 0
+state 421 1
+state 421 2
+state 421 3
+state 421 4
+BlackCipher\BlackCall64.aes	1:593ccb12:46880008
+BlackCipher\BlackCipher64.aes	1:1313953d:57211544
+BlackCipher\BlackXchg.aes	1:2151a74a:9455616
+BlackCipher\config.bc	1:8fb0e7c6:17464
+Canvas.dll	0:c6b00dcb	1:e2f5551f:2861024
+CrashReportClient.exe	0:1c4125f1
+CrashReporter.dll	0:ed271d81
+Data\Base\Base.ini	0:a1a74cf3
+Data\Base\Base.wz	0:f2eaa42f
+Data\Base\Base_000.wz	0:a7849743	1:cc0adc52:7404
+Data\Character\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\_Canvas\_Canvas.wz	0:880b9b62	1:6ffcc0f2:392
+Data\Character\_Canvas\_Canvas_000.wz	0:85c55f46	1:74feac59:44390392
+Data\Character\Accessory\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Accessory\_Canvas\_Canvas.wz	0:880b9b62	1:080d9bfb:392
+Data\Character\Accessory\_Canvas\_Canvas_000.wz	0:d78e70b0	1:d92c7272:2276925
+Data\Character\Accessory\Accessory.ini	0:a1a74cf3
+Data\Character\Accessory\Accessory.wz	0:259a17b7	1:784d753f:432
+Data\Character\Accessory\Accessory_000.wz	0:e92de098	1:0ec98265:4297929
+Data\Character\Afterimage\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Afterimage\_Canvas\_Canvas.wz	0:880b9b62	1:cff71cc9:392
+Data\Character\Afterimage\_Canvas\_Canvas_000.wz	0:c36e3ac8	1:aa338d9a:2954020
+Data\Character\Afterimage\Afterimage.ini	0:a1a74cf3
+Data\Character\Afterimage\Afterimage.wz	0:259a17b7	1:a5b6f220:432
+Data\Character\Afterimage\Afterimage_000.wz	0:145e6b8f	1:dc06c529:735920
+Data\Character\Android\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Android\_Canvas\_Canvas.wz	0:880b9b62	1:4ff7686e:392
+Data\Character\Android\_Canvas\_Canvas_000.wz	0:f14d3587	1:3dd214a9:4530433
+Data\Character\Android\Android.ini	0:a1a74cf3
+Data\Character\Android\Android.wz	0:259a17b7	1:4d09218b:432
+Data\Character\Android\Android_000.wz	0:d1f85edc	1:29aa5547:170439
+Data\Character\ArcaneForce\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\ArcaneForce\_Canvas\_Canvas.wz	0:880b9b62	1:67a210fa:392
+Data\Character\ArcaneForce\_Canvas\_Canvas_000.wz	0:69307cf9	1:6553d4fa:15255
+Data\Character\ArcaneForce\ArcaneForce.ini	0:a1a74cf3
+Data\Character\ArcaneForce\ArcaneForce.wz	0:259a17b7	1:bfd97d18:432
+Data\Character\ArcaneForce\ArcaneForce_000.wz	0:c0b20ca3	1:d851148a:3929
+Data\Character\AuthenticForce\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\AuthenticForce\_Canvas\_Canvas.wz	0:880b9b62	1:df61b8c8:392
+Data\Character\AuthenticForce\_Canvas\_Canvas_000.wz	0:8743323a	1:7063f197:32541
+Data\Character\AuthenticForce\AuthenticForce.ini	0:a1a74cf3
+Data\Character\AuthenticForce\AuthenticForce.wz	0:259a17b7	1:1cb235ce:432
+Data\Character\AuthenticForce\AuthenticForce_000.wz	0:90e51ef4	1:d7ca6725:7922
+Data\Character\Bits\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Bits\_Canvas\_Canvas.wz	0:880b9b62	1:5575784e:392
+Data\Character\Bits\_Canvas\_Canvas_000.wz	0:7509c22a	1:571f75c0:73064
+Data\Character\Bits\Bits.ini	0:a1a74cf3
+Data\Character\Bits\Bits.wz	0:259a17b7	1:936baf04:432
+Data\Character\Bits\Bits_000.wz	0:c789fb99	1:b7ec2155:35393
+Data\Character\Cap\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Cap\_Canvas\_Canvas.wz	0:880b9b62	1:f5e19b5b:392
+Data\Character\Cap\_Canvas\_Canvas_000.wz	0:ca03309f	1:a435b4a0:10667284
+Data\Character\Cap\Cap.ini	0:a1a74cf3
+Data\Character\Cap\Cap.wz	0:259a17b7	1:cab94f06:432
+Data\Character\Cap\Cap_000.wz	0:1734c2d0	1:db197042:18149311
+Data\Character\Cape\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Cape\_Canvas\_Canvas.wz	0:880b9b62	1:4449f58a:392
+Data\Character\Cape\_Canvas\_Canvas_000.wz	0:7a1bb7b4	1:be0542c3:28716516
+Data\Character\Cape\Cape.ini	0:a1a74cf3
+Data\Character\Cape\Cape.wz	0:259a17b7	1:a3e849ba:432
+Data\Character\Cape\Cape_000.wz	0:643d1f42	1:6664912b:14080030
+Data\Character\Character.ini	0:a1a74cf3
+Data\Character\Character.wz	0:dd8ba58d	1:91010bf5:1334
+Data\Character\Character_000.wz	0:387a3e0f	1:def553bb:5277353
+Data\Character\Coat\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Coat\_Canvas\_Canvas.wz	0:880b9b62	1:0e1e21b6:392
+Data\Character\Coat\_Canvas\_Canvas_000.wz	0:2d1da798	1:db8e76c8:13825920
+Data\Character\Coat\Coat.ini	0:a1a74cf3
+Data\Character\Coat\Coat.wz	0:259a17b7	1:967c1cdc:432
+Data\Character\Coat\Coat_000.wz	0:ebe2a84c	1:0c06e134:19212042
+Data\Character\Dragon\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Dragon\_Canvas\_Canvas.wz	0:880b9b62	1:325d74ca:392
+Data\Character\Dragon\_Canvas\_Canvas_000.wz	0:cae14c32	1:919f1b01:11036
+Data\Character\Dragon\Dragon.ini	0:a1a74cf3
+Data\Character\Dragon\Dragon.wz	0:259a17b7	1:fb1d2f33:432
+Data\Character\Dragon\Dragon_000.wz	0:58b9c74b	1:80bd5c53:10782
+Data\Character\EquipBag\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\EquipBag\_Canvas\_Canvas.wz	0:880b9b62	1:f57fabb3:392
+Data\Character\EquipBag\_Canvas\_Canvas_000.wz	0:6542c6b6	1:4f82fc28:4244
+Data\Character\EquipBag\EquipBag.ini	0:a1a74cf3
+Data\Character\EquipBag\EquipBag.wz	0:259a17b7	1:6f0ee3dd:432
+Data\Character\EquipBag\EquipBag_000.wz	0:420c4b9d	1:a04f3d72:1662
+Data\Character\Face\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Face\_Canvas\_Canvas.wz	0:880b9b62	1:b8062c85:392
+Data\Character\Face\_Canvas\_Canvas_000.wz	0:c34a8138	1:45e88529:14798386
+Data\Character\Face\Face.ini	0:a1a74cf3
+Data\Character\Face\Face.wz	0:259a17b7	1:b22c30b0:432
+Data\Character\Face\Face_000.wz	0:ee53c2de	1:9f7b4a6c:54066065
+Data\Character\Glove\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Glove\_Canvas\_Canvas.wz	0:880b9b62	1:b5b8b32e:392
+Data\Character\Glove\_Canvas\_Canvas_000.wz	0:74eb50d6	1:68144fb9:6281819
+Data\Character\Glove\Glove.ini	0:a1a74cf3
+Data\Character\Glove\Glove.wz	0:259a17b7	1:8e740d8f:432
+Data\Character\Glove\Glove_000.wz	0:4b49ec2a	1:3330127f:15209306
+Data\Character\Hair\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Hair\_Canvas\_Canvas.wz	0:880b9b62	1:f6e3b547:392
+Data\Character\Hair\_Canvas\_Canvas_000.wz	0:feb87430	1:45ff78e0:77151671
+Data\Character\Hair\Hair.ini	0:a07fe074
+Data\Character\Hair\Hair.wz	0:259a17b7	1:5119b43b:432
+Data\Character\Hair\Hair_000.wz	0:f636d98d	1:d70522af:100365483
+Data\Character\Hair\Hair_001.wz	0:0d3ba4c8	1:685b1614:37268519
+Data\Character\Longcoat\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Longcoat\_Canvas\_Canvas.wz	0:880b9b62	1:286ba1e2:392
+Data\Character\Longcoat\_Canvas\_Canvas_000.wz	0:6c1a8529	1:66bf27b1:82048607
+Data\Character\Longcoat\Longcoat.ini	0:a1a74cf3
+Data\Character\Longcoat\Longcoat.wz	0:259a17b7	1:35cede55:432
+Data\Character\Longcoat\Longcoat_000.wz	0:2f571ff3	1:1f5ded2d:74551721
+Data\Character\Mechanic\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Mechanic\_Canvas\_Canvas.wz	0:880b9b62	1:19ad93f8:392
+Data\Character\Mechanic\_Canvas\_Canvas_000.wz	0:c0b2bab4	1:0640f974:12931
+Data\Character\Mechanic\Mechanic.ini	0:a1a74cf3
+Data\Character\Mechanic\Mechanic.wz	0:259a17b7	1:5d7c1d1c:432
+Data\Character\Mechanic\Mechanic_000.wz	0:5028fc83	1:4184de14:9587
+Data\Character\Pants\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Pants\_Canvas\_Canvas.wz	0:880b9b62	1:aff5bd17:392
+Data\Character\Pants\_Canvas\_Canvas_000.wz	0:5e91a6fb	1:fa870e42:7592363
+Data\Character\Pants\Pants.ini	0:a1a74cf3
+Data\Character\Pants\Pants.wz	0:259a17b7	1:f76244b7:432
+Data\Character\Pants\Pants_000.wz	0:d36c4556	1:fa295583:8690857
+Data\Character\PetEquip\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\PetEquip\_Canvas\_Canvas.wz	0:880b9b62	1:ae09bf18:392
+Data\Character\PetEquip\_Canvas\_Canvas_000.wz	0:e0f61ef4	1:897aee52:6880210
+Data\Character\PetEquip\PetEquip.ini	0:a1a74cf3
+Data\Character\PetEquip\PetEquip.wz	0:259a17b7	1:e92fc9fc:432
+Data\Character\PetEquip\PetEquip_000.wz	0:3b1a0d38	1:3652faba:6015414
+Data\Character\Ring\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Ring\_Canvas\_Canvas.wz	0:880b9b62	1:c5d19d65:392
+Data\Character\Ring\_Canvas\_Canvas_000.wz	0:ade36fd2	1:3d80c59b:10302447
+Data\Character\Ring\Ring.ini	0:a1a74cf3
+Data\Character\Ring\Ring.wz	0:259a17b7	1:0bcef2f7:432
+Data\Character\Ring\Ring_000.wz	0:768879ba	1:afb1cfb3:1181191
+Data\Character\Shield\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Shield\_Canvas\_Canvas.wz	0:880b9b62	1:9df3cc55:392
+Data\Character\Shield\_Canvas\_Canvas_000.wz	0:3cf87607	1:e3cd42c2:775475
+Data\Character\Shield\Shield.ini	0:a1a74cf3
+Data\Character\Shield\Shield.wz	0:259a17b7	1:1871b204:432
+Data\Character\Shield\Shield_000.wz	0:366c12bb	1:23a2a587:882938
+Data\Character\Shoes\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Character\Shoes\_Canvas\_Canvas.wz	0:880b9b62	1:e3f300af:392
+Data\Character\Shoes\_Canvas\_Canvas_000.wz	0:8b5b0e1c	1:30332362:18656418
+Data\Character\Shoes\Shoes.ini	0:a1a74cf3
+Data\Character\Shoes\Shoes.wz	0:259a17b7	1:76bdc2b5:432
+Data\Character\Shoes\Shoes_000.wz	0:eb619e0b	1:6f155048:26068980
+Data\Character\TamingMob\_Canvas\_Canvas.ini	0:a71d5268
+Data\Character\TamingMob\_Canvas\_Canvas.wz	0:880b9b62	1:6a978c6c:392
+Data\Character\TamingMob\_Canvas\_Canvas_000.wz	0:0b1f0b3c	1:5eb8f35d:96776407
+Data\Character\TamingMob\_Canvas\_Canvas_001.wz	0:f2f8aa41	1:6fc292ac:98884339
+Data\Character\TamingMob\_Canvas\_Canvas_002.wz	0:6ee69df6	1:a78bb75d:98422421
+Data\Character\TamingMob\_Canvas\_Canvas_003.wz	0:2fc3fff5	1:3a847356:97580435
+Data\Character\TamingMob\_Canvas\_Canvas_004.wz	0:25b67c04	1:8aeaddba:99247653
+Data\Character\TamingMob\_Canvas\_Canvas_005.wz	0:deea48a2	1:6d3f50d1:88121824
+Data\Character\TamingMob\TamingMob.ini	0:a1a74cf3
+Data\Character\TamingMob\TamingMob.wz	0:259a17b7	1:e6d06b7c:432
+Data\Character\TamingMob\TamingMob_000.wz	0:74d3aa02	1:5c9e7dd4:11632964
+Data\Character\Weapon\_Canvas\_Canvas.ini	0:a574a7e1
+Data\Character\Weapon\_Canvas\_Canvas.wz	0:880b9b62	1:12409a2b:392
+Data\Character\Weapon\_Canvas\_Canvas_000.wz	0:573ca168	1:dcc05a0a:99972257
+Data\Character\Weapon\_Canvas\_Canvas_001.wz	0:0a11f6aa	1:4e16be1b:99596474
+Data\Character\Weapon\_Canvas\_Canvas_002.wz	0:477fd8d1	1:359950c8:99650755
+Data\Character\Weapon\_Canvas\_Canvas_003.wz	0:3a3c8895	1:a1d4b10e:99861053
+Data\Character\Weapon\_Canvas\_Canvas_004.wz	0:fc1cd7a2	1:5ef664f1:95461979
+Data\Character\Weapon\_Canvas\_Canvas_005.wz	0:84f20e7e	1:c44885de:96433474
+Data\Character\Weapon\_Canvas\_Canvas_006.wz	0:ff3d3f2d	1:268a04fa:64094420
+Data\Character\Weapon\Weapon.ini	0:a1a74cf3
+Data\Character\Weapon\Weapon.wz	0:259a17b7	1:9e457aa0:432
+Data\Character\Weapon\Weapon_000.wz	0:7bdcd204	1:b274a27d:81890029
+Data\Effect\_Canvas\_Canvas.ini	0:c3fd5688	1:c04c0f86:16
+Data\Effect\_Canvas\_Canvas.wz	0:880b9b62	1:c67e09c5:392
+Data\Effect\_Canvas\_Canvas_000.wz	0:4dcfe432	1:405facae:10074882
+Data\Effect\_Canvas\_Canvas_001.wz	0:abc189b0	1:440c2ed1:165502538
+Data\Effect\_Canvas\_Canvas_002.wz	0:a958bd1f	1:ec158e84:47683567
+Data\Effect\_Canvas\_Canvas_003.wz	0:c7f7071d	1:84173bfb:246476888
+Data\Effect\_Canvas\_Canvas_004.wz	0:cd9c079a	1:b5608fda:97775660
+Data\Effect\_Canvas\_Canvas_005.wz	0:d4464a61	1:0f073a1c:49591246
+Data\Effect\_Canvas\_Canvas_006.wz	0:1bc792ee	1:0a5ed1a3:93615751
+Data\Effect\_Canvas\_Canvas_007.wz	0:697505a3	1:f3693392:76472473
+Data\Effect\_Canvas\_Canvas_008.wz	0:d69eb1a4	1:13974f5e:54939436
+Data\Effect\_Canvas\_Canvas_009.wz	0:51eb0613	1:236ac046:167046992
+Data\Effect\_Canvas\_Canvas_010.wz	0:a83a7cc0	1:95f0d731:53797489
+Data\Effect\_Canvas\_Canvas_011.wz	0:60d74b60	1:8c5a8d37:96277200
+Data\Effect\_Canvas\_Canvas_012.wz	0:620c85bd	1:4a0d15e0:62455139
+Data\Effect\_Canvas\_Canvas_013.wz	0:07916ac1	1:501f01e8:143528267
+Data\Effect\_Canvas\_Canvas_014.wz	0:36aae3ea	1:5b670d84:91307315
+Data\Effect\_Canvas\_Canvas_015.wz	0:e80465eb	1:8b431fc5:64800502
+Data\Effect\_Canvas\_Canvas_016.wz	0:40f29255	1:41ea919b:56461782
+Data\Effect\_Canvas\_Canvas_017.wz	0:981f5f62	1:5ad23210:72969304
+Data\Effect\_Canvas\_Canvas_018.wz	0:165e2dc7	1:b7118f2f:66629698
+Data\Effect\_Canvas\_Canvas_019.wz	0:b5d004ce	1:49a512b2:64944402
+Data\Effect\_Canvas\_Canvas_020.wz	0:c61c098c	1:e679f29a:139629241
+Data\Effect\_Canvas\_Canvas_021.wz	0:ce95c16b	1:f89111d6:72248075
+Data\Effect\_Canvas\_Canvas_022.wz	0:58487f27	1:17cdb05a:96764018
+Data\Effect\_Canvas\_Canvas_023.wz	0:4b4c7d94	1:e308548f:146755701
+Data\Effect\_Canvas\_Canvas_024.wz	0:c71c80f8	1:7a59f9bf:72568324
+Data\Effect\_Canvas\_Canvas_025.wz	0:c88ff13c	1:8c62347e:97278608
+Data\Effect\_Canvas\_Canvas_026.wz	0:73c57787	1:b9126a8e:14490803
+Data\Effect\_Canvas\_Canvas_027.wz	0:897aa9bb	1:73825907:115299761
+Data\Effect\_Canvas\_Canvas_028.wz	0:77c5ee5d	1:bcf25c24:84619018
+Data\Effect\_Canvas\_Canvas_029.wz	0:cf2c8283	1:a0da04d7:273203300
+Data\Effect\_Canvas\_Canvas_030.wz	0:60668086	1:3de7e572:409439236
+Data\Effect\_Canvas\_Canvas_031.wz	0:860e3efa	1:b4efd4d1:151344355
+Data\Effect\_Canvas\_Canvas_032.wz	0:1be8642f	1:daba5d99:365329191
+Data\Effect\_Canvas\_Canvas_033.wz	0:f5a11c75	1:5ca94e30:175377084
+Data\Effect\_Canvas\_Canvas_034.wz	0:4335520a	1:e1071d7a:175828812
+Data\Effect\_Canvas\_Canvas_035.wz	0:34adb094	1:055e5e42:39093226
+Data\Effect\_Canvas\_Canvas_036.wz	0:ee307361	1:b89e3fe5:295297514
+Data\Effect\_Canvas\_Canvas_037.wz	0:5835eb56	1:e0835206:45448351
+Data\Effect\_Canvas\_Canvas_038.wz	0:abafac72	1:df76ae64:449006625
+Data\Effect\_Canvas\_Canvas_039.wz	0:54d24648	1:774aa990:279322284
+Data\Effect\_Canvas\_Canvas_040.wz	0:f52b3a7b	1:39d55658:67494319
+Data\Effect\_Canvas\_Canvas_041.wz	0:c8ac9df4	1:1bb6e28c:152238653
+Data\Effect\_Canvas\_Canvas_042.wz	0:42803249	1:ec0e6bf3:506988393
+Data\Effect\_Canvas\_Canvas_043.wz	0:7f131b00	1:a8a8179a:463957127
+Data\Effect\_Canvas\_Canvas_044.wz	0:6f0afcb6	1:a14a88c4:74103590
+Data\Effect\_Canvas\_Canvas_045.wz	0:3040ca97	1:863237b6:74522118
+Data\Effect\_Canvas\_Canvas_046.wz	0:acb55abc	1:03476aa6:84613520
+Data\Effect\_Canvas\_Canvas_047.wz	0:57b2d50f	1:c7bf0fb6:348118781
+Data\Effect\_Canvas\_Canvas_048.wz	0:763639fc	1:ff61c000:476025
+Data\Effect\_Canvas\_Canvas_049.wz	0:16b6432b	1:4fb38b92:162544548
+Data\Effect\_Canvas\_Canvas_050.wz	0:30bfd61c	1:597c1c98:124577155
+Data\Effect\_Canvas\_Canvas_051.wz	0:7e397a71	1:40200bb4:55465492
+Data\Effect\_Canvas\_Canvas_052.wz	0:15767fd8	1:23afebe6:84289981
+Data\Effect\_Canvas\_Canvas_053.wz	0:63d85fdf	1:5360abba:69766053
+Data\Effect\_Canvas\_Canvas_054.wz	0:fce3fce4	1:bf0c91ec:30908890
+Data\Effect\_Canvas\_Canvas_055.wz	1:c92af648:162367495
+Data\Effect\_Canvas\_Canvas_056.wz	1:299a2bf9:1125612
+Data\Effect\Effect.ini	0:a07fe074
+Data\Effect\Effect.wz	0:241165f7	1:b41de016:476
+Data\Effect\Effect_000.wz	0:dd55cfa4	1:8c0401f6:97575698
+Data\Effect\Effect_001.wz	0:8f8a1729	1:f64a22d4:24473872
+Data\Effect\Particles\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Effect\Particles\_Canvas\_Canvas.wz	0:880b9b62	1:022b7036:392
+Data\Effect\Particles\_Canvas\_Canvas_000.wz	0:a909d80b	1:48143986:11651210
+Data\Effect\Particles\Particles.ini	0:a1a74cf3
+Data\Effect\Particles\Particles.wz	0:259a17b7	1:a05960f4:432
+Data\Effect\Particles\Particles_000.wz	0:0b9be343	1:6b532b25:6704079
+Data\Etc\_Canvas\_Canvas.ini	0:b6afcca9
+Data\Etc\_Canvas\_Canvas.wz	0:880b9b62	1:d48014c5:392
+Data\Etc\_Canvas\_Canvas_000.wz	0:54bc84fc	1:0c27f4a5:89281002
+Data\Etc\_Canvas\_Canvas_001.wz	0:2c141895	1:65ea2441:55794801
+Data\Etc\_Canvas\_Canvas_002.wz	0:a4781fdc	1:24c62529:161232688
+Data\Etc\_Canvas\_Canvas_003.wz	0:26812fab	1:70846ea4:107630544
+Data\Etc\_Canvas\_Canvas_004.wz	0:abbd24c4	1:3261eadc:202878946
+Data\Etc\_Canvas\_Canvas_005.wz	0:9be21d87	1:c3d8dea5:167798597
+Data\Etc\_Canvas\_Canvas_006.wz	0:1a6e4c16	1:b2bd01b4:40142515
+Data\Etc\_Canvas\_Canvas_007.wz	0:25dbc6bb	1:58f7ea0e:115414173
+Data\Etc\_Canvas\_Canvas_008.wz	0:8b43fc1c	1:89447569:64861859
+Data\Etc\_Canvas\_Canvas_009.wz	0:c13fb194	1:8855ac43:58859778
+Data\Etc\_Canvas\_Canvas_010.wz	0:4a44a4d5	1:0d8eabba:96931128
+Data\Etc\_Canvas\_Canvas_011.wz	0:3b908149	1:d45cd87a:32916885
+Data\Etc\_Canvas\_Canvas_012.wz	0:b5191027	1:1a144434:227529443
+Data\Etc\_Canvas\_Canvas_013.wz	0:61901b01	1:4fb7ed94:118289528
+Data\Etc\_Canvas\_Canvas_014.wz	0:65a7b541	1:ec6213cf:96356179
+Data\Etc\_Canvas\_Canvas_015.wz	0:a418486a	1:df2fc4db:38930042
+Data\Etc\_Canvas\_Canvas_016.wz	0:71fb6862	1:a4cde902:78885342
+Data\Etc\_Canvas\_Canvas_017.wz	0:df0619a2	1:b2f0a9dd:247250745
+Data\Etc\_Canvas\_Canvas_018.wz	0:637f511a	1:9576cc9f:457002
+Data\Etc\Achievement\Achievement.ini	0:a1a74cf3
+Data\Etc\Achievement\Achievement.wz	0:374e495d	1:0c826f47:448
+Data\Etc\Achievement\Achievement_000.wz	0:8d05dc22	1:806d3a40:7442
+Data\Etc\Achievement\AchievementData\AchievementData.ini	0:a1a74cf3
+Data\Etc\Achievement\AchievementData\AchievementData.wz	0:880b9b62	1:2828f801:392
+Data\Etc\Achievement\AchievementData\AchievementData_000.wz	0:464c299d	1:d08ebdb4:1832131
+Data\Etc\Android\_Canvas\_Canvas.ini	1:a1a74cf3:15
+Data\Etc\Android\_Canvas\_Canvas.wz	1:1a4d47f0:392
+Data\Etc\Android\_Canvas\_Canvas_000.wz	1:d1832966:2595300
+Data\Etc\Android\Android.ini	0:a1a74cf3
+Data\Etc\Android\Android.wz	0:880b9b62	1:406d5c2f:432
+Data\Etc\Android\Android_000.wz	0:0a0dbb0d	1:3f643ebd:253914
+Data\Etc\Etc.ini	0:a21615fd	1:a3ceb97a:15
+Data\Etc\Etc.wz	0:cf86b3e9	1:80612078:520
+Data\Etc\Etc_000.wz	0:7d72cb65	1:281aa52c:97376053
+Data\Etc\Etc_001.wz	0:21e59a35	1:d5cb59cb:34807345
+Data\Etc\Etc_002.wz	0:4e5a2348	1:578d9719:144275107
+Data\Etc\Etc_003.wz	1:86046c58:1619235
+Data\Item\Cash\_Canvas\_Canvas.ini	0:a07fe074
+Data\Item\Cash\_Canvas\_Canvas.wz	0:76e02a92	1:251f933c:392
+Data\Item\Cash\_Canvas\_Canvas_000.wz	0:3b4d5653	1:8fecadbd:209829042
+Data\Item\Cash\_Canvas\_Canvas_001.wz	0:628dd5cf	1:639db034:35106806
+Data\Item\Cash\Cash.ini	0:a1a74cf3
+Data\Item\Cash\Cash.wz	0:6f6a5ef6	1:0c2b96c5:432
+Data\Item\Cash\Cash_000.wz	0:3e108c5f	1:698efc86:2158274
+Data\Item\Consume\_Canvas\_Canvas.ini	0:a07fe074
+Data\Item\Consume\_Canvas\_Canvas.wz	0:a8a15787	1:9b51a409:392
+Data\Item\Consume\_Canvas\_Canvas_000.wz	0:5abf569e	1:b3df19df:86198309
+Data\Item\Consume\_Canvas\_Canvas_001.wz	0:d0c5ec4b	1:d7ec3520:55393750
+Data\Item\Consume\Consume.ini	0:a1a74cf3
+Data\Item\Consume\Consume.wz	0:5be6cb49	1:96bf91ab:432
+Data\Item\Consume\Consume_000.wz	0:e067a72f	1:993fe489:6217327
+Data\Item\Etc\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Item\Etc\_Canvas\_Canvas.wz	0:34cfec55	1:1c3aca49:392
+Data\Item\Etc\_Canvas\_Canvas_000.wz	0:746d3307	1:fd5197a3:6217229
+Data\Item\Etc\Etc.ini	0:a1a74cf3
+Data\Item\Etc\Etc.wz	0:f3c8683a	1:594713b0:432
+Data\Item\Etc\Etc_000.wz	0:7293c6dd	1:ca3bfef9:1694189
+Data\Item\Install\_Canvas\_Canvas.ini	0:a3ceb97a
+Data\Item\Install\_Canvas\_Canvas.wz	0:1299db99	1:961a68a5:392
+Data\Item\Install\_Canvas\_Canvas_000.wz	0:09b8f39b	1:cfd2088e:87509609
+Data\Item\Install\_Canvas\_Canvas_001.wz	0:dfc75f6f	1:084d5f42:110391097
+Data\Item\Install\_Canvas\_Canvas_002.wz	0:07a673a9	1:5d3ee113:275368802
+Data\Item\Install\_Canvas\_Canvas_003.wz	0:34259713	1:63924aa7:16674695
+Data\Item\Install\Install.ini	0:a1a74cf3
+Data\Item\Install\Install.wz	0:5ada7e64	1:5bb29226:432
+Data\Item\Install\Install_000.wz	0:f15f53a4	1:23f40d31:4305431
+Data\Item\Item.ini	0:a1a74cf3
+Data\Item\Item.wz	0:aac9474a	1:2c57023b:610
+Data\Item\Item_000.wz	0:25681712	1:c9422823:595855
+Data\Item\Pet\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Item\Pet\_Canvas\_Canvas.wz	0:976d4575	1:d432279e:392
+Data\Item\Pet\_Canvas\_Canvas_000.wz	0:ad9de537	1:7547a3ba:61429749
+Data\Item\Pet\Pet.ini	0:a1a74cf3
+Data\Item\Pet\Pet.wz	0:62ab053b	1:d73c8a2a:432
+Data\Item\Pet\Pet_000.wz	0:03bed4ab	1:db603b46:11009977
+Data\Item\Special\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Item\Special\_Canvas\_Canvas.wz	0:47c1f29c	1:070227e7:392
+Data\Item\Special\_Canvas\_Canvas_000.wz	0:544528c2	1:304b01b5:1013243
+Data\Item\Special\Special.ini	0:a1a74cf3
+Data\Item\Special\Special.wz	0:188d0ea1	1:c9ee8ca8:432
+Data\Item\Special\Special_000.wz	0:6da4da17	1:c71c8e57:448279
+Data\Map\_Canvas\_Canvas.ini	0:a3ceb97a
+Data\Map\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\_Canvas\_Canvas_000.wz	0:d064f98d
+Data\Map\_Canvas\_Canvas_001.wz	0:8b02ed1a
+Data\Map\_Canvas\_Canvas_002.wz	0:92eca09f
+Data\Map\_Canvas\_Canvas_003.wz	0:be132282
+Data\Map\Back\_Canvas\_Canvas.ini	0:dd165d6a
+Data\Map\Back\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\Back\_Canvas\_Canvas_000.wz	0:0aeef337
+Data\Map\Back\_Canvas\_Canvas_001.wz	0:bf4cba64
+Data\Map\Back\_Canvas\_Canvas_002.wz	0:f5c12b2f
+Data\Map\Back\_Canvas\_Canvas_003.wz	0:2bc80905
+Data\Map\Back\_Canvas\_Canvas_004.wz	0:8c5cbdee
+Data\Map\Back\_Canvas\_Canvas_005.wz	0:23b34a86
+Data\Map\Back\_Canvas\_Canvas_006.wz	0:a8b959d9
+Data\Map\Back\_Canvas\_Canvas_007.wz	0:2b5656fc
+Data\Map\Back\_Canvas\_Canvas_008.wz	0:334d986c
+Data\Map\Back\_Canvas\_Canvas_009.wz	0:1e6217e8
+Data\Map\Back\_Canvas\_Canvas_010.wz	0:ccc46038
+Data\Map\Back\_Canvas\_Canvas_011.wz	0:5af93608
+Data\Map\Back\_Canvas\_Canvas_012.wz	0:8070833d
+Data\Map\Back\_Canvas\_Canvas_013.wz	0:36330ce9
+Data\Map\Back\_Canvas\_Canvas_014.wz	0:b08bb808
+Data\Map\Back\_Canvas\_Canvas_015.wz	0:bab397ca
+Data\Map\Back\_Canvas\_Canvas_016.wz	0:9631c5c7
+Data\Map\Back\_Canvas\_Canvas_017.wz	0:f1255da5
+Data\Map\Back\_Canvas\_Canvas_018.wz	0:05a634f2
+Data\Map\Back\_Canvas\_Canvas_019.wz	0:1fd39d9e
+Data\Map\Back\_Canvas\_Canvas_020.wz	0:74d09ba8
+Data\Map\Back\_Canvas\_Canvas_021.wz	0:d0c11f34
+Data\Map\Back\_Canvas\_Canvas_022.wz	0:9f374f68
+Data\Map\Back\_Canvas\_Canvas_023.wz	0:d123985b
+Data\Map\Back\_Canvas\_Canvas_024.wz	0:bfe0de56
+Data\Map\Back\_Canvas\_Canvas_025.wz	0:d36b975b
+Data\Map\Back\_Canvas\_Canvas_026.wz	0:496d7439
+Data\Map\Back\_Canvas\_Canvas_027.wz	0:2252581c
+Data\Map\Back\Back.ini	0:a1a74cf3
+Data\Map\Back\Back.wz	0:259a17b7
+Data\Map\Back\Back_000.wz	0:65d8c9d0	1:620fd480:26232808
+Data\Map\Map.ini	0:a1a74cf3
+Data\Map\Map.wz	0:344ee364
+Data\Map\Map\Map.ini	0:a1a74cf3
+Data\Map\Map\Map.wz	0:3840694c
+Data\Map\Map\Map0\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Map\Map\Map0\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\Map\Map0\_Canvas\_Canvas_000.wz	0:3a6113d5
+Data\Map\Map\Map0\Map0.ini	0:a1a74cf3
+Data\Map\Map\Map0\Map0.wz	0:259a17b7
+Data\Map\Map\Map0\Map0_000.wz	0:aff5a309	1:d9ef4ff2:1314910
+Data\Map\Map\Map1\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Map\Map\Map1\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\Map\Map1\_Canvas\_Canvas_000.wz	0:650ebad2	1:065b1444:3297454
+Data\Map\Map\Map1\Map1.ini	0:a1a74cf3
+Data\Map\Map\Map1\Map1.wz	0:259a17b7
+Data\Map\Map\Map1\Map1_000.wz	0:38a2f959	1:b6e35a3a:17442731
+Data\Map\Map\Map2\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Map\Map\Map2\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\Map\Map2\_Canvas\_Canvas_000.wz	0:f539afa4	1:d8c03c8b:5050922
+Data\Map\Map\Map2\Map2.ini	0:a1a74cf3
+Data\Map\Map\Map2\Map2.wz	0:259a17b7
+Data\Map\Map\Map2\Map2_000.wz	0:67533e2b	1:2e9dfb43:29267101
+Data\Map\Map\Map3\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Map\Map\Map3\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\Map\Map3\_Canvas\_Canvas_000.wz	0:ad972996
+Data\Map\Map\Map3\Map3.ini	0:a1a74cf3
+Data\Map\Map\Map3\Map3.wz	0:259a17b7
+Data\Map\Map\Map3\Map3_000.wz	0:8b59af55	1:b98d696c:31694535
+Data\Map\Map\Map4\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Map\Map\Map4\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\Map\Map4\_Canvas\_Canvas_000.wz	0:242ed715	1:973f5a64:5634109
+Data\Map\Map\Map4\Map4.ini	0:a1a74cf3
+Data\Map\Map\Map4\Map4.wz	0:259a17b7
+Data\Map\Map\Map4\Map4_000.wz	0:b8f845fc	1:f39135c6:29123568
+Data\Map\Map\Map5\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Map\Map\Map5\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\Map\Map5\_Canvas\_Canvas_000.wz	0:dc9bad69
+Data\Map\Map\Map5\Map5.ini	0:a1a74cf3
+Data\Map\Map\Map5\Map5.wz	0:259a17b7
+Data\Map\Map\Map5\Map5_000.wz	0:2971d423
+Data\Map\Map\Map6\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Map\Map\Map6\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\Map\Map6\_Canvas\_Canvas_000.wz	0:c4922e2a
+Data\Map\Map\Map6\Map6.ini	0:a1a74cf3
+Data\Map\Map\Map6\Map6.wz	0:259a17b7
+Data\Map\Map\Map6\Map6_000.wz	0:b4850b43
+Data\Map\Map\Map8\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Map\Map\Map8\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\Map\Map8\_Canvas\_Canvas_000.wz	0:c05884b0
+Data\Map\Map\Map8\Map8.ini	0:a1a74cf3
+Data\Map\Map\Map8\Map8.wz	0:259a17b7
+Data\Map\Map\Map8\Map8_000.wz	0:0daf8e0b
+Data\Map\Map\Map9\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Map\Map\Map9\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\Map\Map9\_Canvas\_Canvas_000.wz	0:1a707ca0	1:3d88ffec:28038220
+Data\Map\Map\Map9\Map9.ini	0:a07fe074
+Data\Map\Map\Map9\Map9.wz	0:259a17b7
+Data\Map\Map\Map9\Map9_000.wz	0:0485e258	1:6a266267:100209761
+Data\Map\Map\Map9\Map9_001.wz	0:d713e67b	1:2e36da8d:78748980
+Data\Map\Map\Map_000.wz	0:f181c521	1:43b30916:1234966
+Data\Map\Map_000.wz	0:691c7f2c	1:5209bfbc:4355893
+Data\Map\Obj\_Canvas\_Canvas.ini	0:1a9b8baa
+Data\Map\Obj\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\Obj\_Canvas\_Canvas_000.wz	0:56fce716
+Data\Map\Obj\_Canvas\_Canvas_001.wz	0:d050543c
+Data\Map\Obj\_Canvas\_Canvas_002.wz	0:ca25e2e8
+Data\Map\Obj\_Canvas\_Canvas_003.wz	0:36ddab9d
+Data\Map\Obj\_Canvas\_Canvas_004.wz	0:7d99caca
+Data\Map\Obj\_Canvas\_Canvas_005.wz	0:99e0d5f5
+Data\Map\Obj\_Canvas\_Canvas_006.wz	0:666e69d2
+Data\Map\Obj\_Canvas\_Canvas_007.wz	0:d1a9a235
+Data\Map\Obj\_Canvas\_Canvas_008.wz	0:f3efaf43
+Data\Map\Obj\_Canvas\_Canvas_009.wz	0:8eda7a9c
+Data\Map\Obj\_Canvas\_Canvas_010.wz	0:9cb04076
+Data\Map\Obj\_Canvas\_Canvas_011.wz	0:1c6cd4e7
+Data\Map\Obj\_Canvas\_Canvas_012.wz	0:01017f15
+Data\Map\Obj\_Canvas\_Canvas_013.wz	0:ddf1a67f
+Data\Map\Obj\_Canvas\_Canvas_014.wz	0:72f8395f
+Data\Map\Obj\_Canvas\_Canvas_015.wz	0:00685351
+Data\Map\Obj\_Canvas\_Canvas_016.wz	0:ddb2a3fa
+Data\Map\Obj\_Canvas\_Canvas_017.wz	0:3800fda8
+Data\Map\Obj\_Canvas\_Canvas_018.wz	0:1068c0b6
+Data\Map\Obj\_Canvas\_Canvas_019.wz	0:5b1b0d18
+Data\Map\Obj\_Canvas\_Canvas_020.wz	0:e439cf6c
+Data\Map\Obj\_Canvas\_Canvas_021.wz	0:de80e3f8
+Data\Map\Obj\_Canvas\_Canvas_022.wz	0:008c010e
+Data\Map\Obj\_Canvas\_Canvas_023.wz	0:95023919
+Data\Map\Obj\_Canvas\_Canvas_024.wz	0:c894f3f1
+Data\Map\Obj\_Canvas\_Canvas_025.wz	0:189b17a1
+Data\Map\Obj\_Canvas\_Canvas_026.wz	0:1a2f53c1
+Data\Map\Obj\_Canvas\_Canvas_027.wz	0:bc5d20bd
+Data\Map\Obj\_Canvas\_Canvas_028.wz	0:55dc7acc
+Data\Map\Obj\_Canvas\_Canvas_029.wz	0:aff3b8bc
+Data\Map\Obj\_Canvas\_Canvas_030.wz	0:a765d480
+Data\Map\Obj\_Canvas\_Canvas_031.wz	0:d1d90ce2
+Data\Map\Obj\_Canvas\_Canvas_032.wz	0:766d4bd2
+Data\Map\Obj\_Canvas\_Canvas_033.wz	0:411d3424
+Data\Map\Obj\_Canvas\_Canvas_034.wz	0:fbe56e6a
+Data\Map\Obj\_Canvas\_Canvas_035.wz	0:80a3805a
+Data\Map\Obj\_Canvas\_Canvas_036.wz	0:a7cb0447
+Data\Map\Obj\_Canvas\_Canvas_037.wz	0:c9f9c976
+Data\Map\Obj\_Canvas\_Canvas_038.wz	0:997b61a4
+Data\Map\Obj\_Canvas\_Canvas_039.wz	0:d080f0f3
+Data\Map\Obj\_Canvas\_Canvas_040.wz	0:9ededc00
+Data\Map\Obj\_Canvas\_Canvas_041.wz	0:f3dab286
+Data\Map\Obj\_Canvas\_Canvas_042.wz	0:2a9bbcb5
+Data\Map\Obj\_Canvas\_Canvas_043.wz	0:e9c81910
+Data\Map\Obj\Obj.ini	0:a1a74cf3
+Data\Map\Obj\Obj.wz	0:259a17b7
+Data\Map\Obj\Obj_000.wz	0:944445a5	1:f5a789f7:51526589
+Data\Map\Particle\_Canvas\_Canvas.ini	0:a07fe074
+Data\Map\Particle\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\Particle\_Canvas\_Canvas_000.wz	0:9277f332
+Data\Map\Particle\_Canvas\_Canvas_001.wz	0:9ee57244
+Data\Map\Particle\Particle.ini	0:a1a74cf3
+Data\Map\Particle\Particle.wz	0:259a17b7
+Data\Map\Particle\Particle_000.wz	0:6c7cdb3a	1:e59b2963:23958795
+Data\Map\Tile\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Map\Tile\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\Tile\_Canvas\_Canvas_000.wz	0:3cd018ec
+Data\Map\Tile\Tile.ini	0:a1a74cf3
+Data\Map\Tile\Tile.wz	0:259a17b7
+Data\Map\Tile\Tile_000.wz	0:af379d24	1:dd3a451d:625608
+Data\Map\WorldMap\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Map\WorldMap\_Canvas\_Canvas.wz	0:880b9b62
+Data\Map\WorldMap\_Canvas\_Canvas_000.wz	0:d5c96b53
+Data\Map\WorldMap\WorldMap.ini	0:a1a74cf3
+Data\Map\WorldMap\WorldMap.wz	0:259a17b7
+Data\Map\WorldMap\WorldMap_000.wz	0:388f9dc7	1:fa1f87ad:263698
+Data\Mob\_Canvas\_Canvas.ini	0:193f1467
+Data\Mob\_Canvas\_Canvas.wz	0:880b9b62
+Data\Mob\_Canvas\_Canvas_000.wz	0:2a63c96e
+Data\Mob\_Canvas\_Canvas_001.wz	0:1c8f2258
+Data\Mob\_Canvas\_Canvas_002.wz	0:212bf09d
+Data\Mob\_Canvas\_Canvas_003.wz	0:2ff2d9d1
+Data\Mob\_Canvas\_Canvas_004.wz	0:687761c9
+Data\Mob\_Canvas\_Canvas_005.wz	0:46398cca
+Data\Mob\_Canvas\_Canvas_006.wz	0:31e4265b
+Data\Mob\_Canvas\_Canvas_007.wz	0:212f67b5
+Data\Mob\_Canvas\_Canvas_008.wz	0:e6892f36
+Data\Mob\_Canvas\_Canvas_009.wz	0:5911c8c1
+Data\Mob\_Canvas\_Canvas_010.wz	0:742524c3
+Data\Mob\_Canvas\_Canvas_011.wz	0:c17c5c32
+Data\Mob\_Canvas\_Canvas_012.wz	0:ef751a92
+Data\Mob\_Canvas\_Canvas_013.wz	0:3a0a1834
+Data\Mob\_Canvas\_Canvas_014.wz	0:f3f690ab
+Data\Mob\_Canvas\_Canvas_015.wz	0:e4cd86b1
+Data\Mob\_Canvas\_Canvas_016.wz	0:a96b991a
+Data\Mob\_Canvas\_Canvas_017.wz	0:776b1770
+Data\Mob\_Canvas\_Canvas_018.wz	0:9d01ddf5
+Data\Mob\_Canvas\_Canvas_019.wz	0:1b54bc28
+Data\Mob\_Canvas\_Canvas_020.wz	0:2fd943fd
+Data\Mob\_Canvas\_Canvas_021.wz	0:59441768
+Data\Mob\_Canvas\_Canvas_022.wz	0:243ea1a3
+Data\Mob\_Canvas\_Canvas_023.wz	0:849bdeb6
+Data\Mob\_Canvas\_Canvas_024.wz	0:6ff0ac56
+Data\Mob\_Canvas\_Canvas_025.wz	0:0868d850
+Data\Mob\_Canvas\_Canvas_026.wz	0:c31ea933
+Data\Mob\_Canvas\_Canvas_027.wz	0:d369cce8
+Data\Mob\_Canvas\_Canvas_028.wz	0:018a2951
+Data\Mob\_Canvas\_Canvas_029.wz	0:9fbfd839
+Data\Mob\_Canvas\_Canvas_030.wz	0:17cf252d
+Data\Mob\_Canvas\_Canvas_031.wz	0:e27cadd1
+Data\Mob\_Canvas\_Canvas_032.wz	0:438e06ca
+Data\Mob\_Canvas\_Canvas_033.wz	0:01a5e565
+Data\Mob\_Canvas\_Canvas_034.wz	0:a68b6c7b
+Data\Mob\_Canvas\_Canvas_035.wz	0:58f74a14
+Data\Mob\_Canvas\_Canvas_036.wz	0:fe06868d
+Data\Mob\_Canvas\_Canvas_037.wz	0:ebda0ca6
+Data\Mob\_Canvas\_Canvas_038.wz	0:6aae17b9
+Data\Mob\_Canvas\_Canvas_039.wz	0:a62e0cd8
+Data\Mob\_Canvas\_Canvas_040.wz	0:41959004
+Data\Mob\_Canvas\_Canvas_041.wz	0:7d5be294
+Data\Mob\_Canvas\_Canvas_042.wz	0:1565838c
+Data\Mob\_Canvas\_Canvas_043.wz	0:666d3f50
+Data\Mob\_Canvas\_Canvas_044.wz	0:512f8aad
+Data\Mob\_Canvas\_Canvas_045.wz	0:ddb12f9a
+Data\Mob\_Canvas\_Canvas_046.wz	0:7a69a756
+Data\Mob\_Canvas\_Canvas_047.wz	0:f90b1066
+Data\Mob\_Canvas\_Canvas_048.wz	0:0480c384
+Data\Mob\_Canvas\_Canvas_049.wz	0:6ba98534
+Data\Mob\_Canvas\_Canvas_050.wz	0:cdc6f061
+Data\Mob\_Canvas\_Canvas_051.wz	0:eeb95e25
+Data\Mob\_Canvas\_Canvas_052.wz	0:b0c591ac
+Data\Mob\_Canvas\_Canvas_053.wz	0:476fc067
+Data\Mob\_Canvas\_Canvas_054.wz	0:11544bc1
+Data\Mob\_Canvas\_Canvas_055.wz	0:1cba50f1
+Data\Mob\_Canvas\_Canvas_056.wz	0:fa651f1b
+Data\Mob\_Canvas\_Canvas_057.wz	0:3f5d655c
+Data\Mob\_Canvas\_Canvas_058.wz	0:39293f33
+Data\Mob\_Canvas\_Canvas_059.wz	0:6ec4d525
+Data\Mob\_Canvas\_Canvas_060.wz	0:649aded6
+Data\Mob\_Canvas\_Canvas_061.wz	0:4801592f
+Data\Mob\_Canvas\_Canvas_062.wz	0:52ffc617
+Data\Mob\_Canvas\_Canvas_063.wz	0:2085f903
+Data\Mob\_Canvas\_Canvas_064.wz	0:ae8aed55
+Data\Mob\_Canvas\_Canvas_065.wz	0:76427e5c
+Data\Mob\_Canvas\_Canvas_066.wz	0:f76d8dce
+Data\Mob\_Canvas\_Canvas_067.wz	0:03ebbb2e
+Data\Mob\_Canvas\_Canvas_068.wz	0:cf298a29
+Data\Mob\_Canvas\_Canvas_069.wz	0:f78eb87f
+Data\Mob\_Canvas\_Canvas_070.wz	0:4a1f9c99
+Data\Mob\_Canvas\_Canvas_071.wz	0:bd82e2c9
+Data\Mob\_Canvas\_Canvas_072.wz	0:7947dadf	1:80520add:132131351
+Data\Mob\_Canvas\_Canvas_073.wz	0:1216eca8
+Data\Mob\_Canvas\_Canvas_074.wz	0:4fe4ad0b
+Data\Mob\_Canvas\_Canvas_075.wz	0:3c83d51a
+Data\Mob\_Canvas\_Canvas_076.wz	0:d921ece2
+Data\Mob\_Canvas\_Canvas_077.wz	0:83704179
+Data\Mob\_Canvas\_Canvas_078.wz	0:f3274ec1
+Data\Mob\_Canvas\_Canvas_079.wz	0:4afbddbc
+Data\Mob\_Canvas\_Canvas_080.wz	0:82b716b0
+Data\Mob\_Canvas\_Canvas_081.wz	0:f2891553
+Data\Mob\_Canvas\_Canvas_082.wz	0:22f73373
+Data\Mob\_Canvas\_Canvas_083.wz	0:4123fd2e
+Data\Mob\_Canvas\_Canvas_084.wz	0:33afd051
+Data\Mob\_Canvas\_Canvas_085.wz	0:73c4561f
+Data\Mob\_Canvas\_Canvas_086.wz	0:d342a5a0
+Data\Mob\_Canvas\_Canvas_087.wz	0:9925fbdc
+Data\Mob\_Canvas\_Canvas_088.wz	0:06b4680d
+Data\Mob\_Canvas\_Canvas_089.wz	0:8703adbc
+Data\Mob\_Canvas\_Canvas_090.wz	0:34f67ec5
+Data\Mob\_Canvas\_Canvas_091.wz	0:3add5ab3
+Data\Mob\_Canvas\_Canvas_092.wz	0:484a4676
+Data\Mob\_Canvas\_Canvas_093.wz	0:de1523b3
+Data\Mob\_Canvas\_Canvas_094.wz	0:13260bd4
+Data\Mob\_Canvas\_Canvas_095.wz	0:d659ea81
+Data\Mob\_Canvas\_Canvas_096.wz	0:cf938e17
+Data\Mob\_Canvas\_Canvas_097.wz	0:6bea8f40
+Data\Mob\_Canvas\_Canvas_098.wz	0:d1a7f1ac
+Data\Mob\_Canvas\_Canvas_099.wz	0:a4dd249a
+Data\Mob\_Canvas\_Canvas_100.wz	0:312a5b55
+Data\Mob\_Canvas\_Canvas_101.wz	0:b467c8bf
+Data\Mob\_Canvas\_Canvas_102.wz	0:d89d277a
+Data\Mob\_Canvas\_Canvas_103.wz	0:72886861
+Data\Mob\_Canvas\_Canvas_104.wz	0:87f624f7
+Data\Mob\_Canvas\_Canvas_105.wz	0:8f18229a
+Data\Mob\_Canvas\_Canvas_106.wz	0:39d913a7
+Data\Mob\_Canvas\_Canvas_107.wz	0:5da97d0a
+Data\Mob\_Canvas\_Canvas_108.wz	0:cc588c77
+Data\Mob\_Canvas\_Canvas_109.wz	0:456ea7d0
+Data\Mob\_Canvas\_Canvas_110.wz	0:1f3b4386
+Data\Mob\_Canvas\_Canvas_111.wz	0:eac7aaa7
+Data\Mob\_Canvas\_Canvas_112.wz	0:048e8acf	1:44593e25:96031162
+Data\Mob\_Canvas\_Canvas_113.wz	0:7bc69a1c	1:1001e52b:33278636
+Data\Mob\BossPattern\_Canvas\_Canvas.ini	0:bed0b60a
+Data\Mob\BossPattern\_Canvas\_Canvas.wz	0:880b9b62
+Data\Mob\BossPattern\_Canvas\_Canvas_000.wz	0:553d53f2
+Data\Mob\BossPattern\_Canvas\_Canvas_001.wz	0:1d810b2e
+Data\Mob\BossPattern\_Canvas\_Canvas_002.wz	0:efff91bc
+Data\Mob\BossPattern\_Canvas\_Canvas_003.wz	0:ea1c10f4
+Data\Mob\BossPattern\_Canvas\_Canvas_004.wz	0:debd9c5f
+Data\Mob\BossPattern\_Canvas\_Canvas_005.wz	0:fbd4f94a
+Data\Mob\BossPattern\_Canvas\_Canvas_006.wz	0:b10835fd
+Data\Mob\BossPattern\_Canvas\_Canvas_007.wz	0:caf45608
+Data\Mob\BossPattern\_Canvas\_Canvas_008.wz	0:334628e6
+Data\Mob\BossPattern\_Canvas\_Canvas_009.wz	0:0ddcc5a1
+Data\Mob\BossPattern\_Canvas\_Canvas_010.wz	0:e342d2c4
+Data\Mob\BossPattern\_Canvas\_Canvas_011.wz	0:210b5c1d
+Data\Mob\BossPattern\_Canvas\_Canvas_012.wz	0:825f5fbd
+Data\Mob\BossPattern\_Canvas\_Canvas_013.wz	0:82bff5f1
+Data\Mob\BossPattern\_Canvas\_Canvas_014.wz	0:442a5495
+Data\Mob\BossPattern\_Canvas\_Canvas_015.wz	0:e53f3cff
+Data\Mob\BossPattern\BalanceSettings\BalanceSettings.ini	0:a1a74cf3
+Data\Mob\BossPattern\BalanceSettings\BalanceSettings.wz	0:880b9b62
+Data\Mob\BossPattern\BalanceSettings\BalanceSettings_000.wz	0:eec74988
+Data\Mob\BossPattern\BossObjectAction\_Canvas\_Canvas.ini	0:a71d5268
+Data\Mob\BossPattern\BossObjectAction\_Canvas\_Canvas.wz	0:880b9b62
+Data\Mob\BossPattern\BossObjectAction\_Canvas\_Canvas_000.wz	0:be8b471f
+Data\Mob\BossPattern\BossObjectAction\_Canvas\_Canvas_001.wz	0:e5c72999
+Data\Mob\BossPattern\BossObjectAction\_Canvas\_Canvas_002.wz	0:073d4f33
+Data\Mob\BossPattern\BossObjectAction\_Canvas\_Canvas_003.wz	0:ce8f165c
+Data\Mob\BossPattern\BossObjectAction\_Canvas\_Canvas_004.wz	0:e6d4efc6
+Data\Mob\BossPattern\BossObjectAction\_Canvas\_Canvas_005.wz	0:feb66b9f
+Data\Mob\BossPattern\BossObjectAction\BossObjectAction.ini	0:a1a74cf3
+Data\Mob\BossPattern\BossObjectAction\BossObjectAction.wz	0:259a17b7
+Data\Mob\BossPattern\BossObjectAction\BossObjectAction_000.wz	0:f8d5f234
+Data\Mob\BossPattern\BossPattern.ini	0:e413a317
+Data\Mob\BossPattern\BossPattern.wz	0:0e88ec4d
+Data\Mob\Mob.ini	0:e413a317
+Data\Mob\Mob.wz	0:493ad3c3
+Data\Mob\QuestCountGroup\QuestCountGroup.ini	0:a1a74cf3
+Data\Mob\QuestCountGroup\QuestCountGroup.wz	0:880b9b62
+Data\Mob\QuestCountGroup\QuestCountGroup_000.wz	0:7448b1ff	1:5b38da4f:21172
+Data\Morph\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Morph\_Canvas\_Canvas.wz	0:880b9b62	1:1d9aa178:392
+Data\Morph\_Canvas\_Canvas_000.wz	0:d5267690	1:2d46a9ea:89682300
+Data\Morph\Morph.ini	0:a1a74cf3
+Data\Morph\Morph.wz	0:259a17b7	1:ef3869d8:432
+Data\Morph\Morph_000.wz	0:db9f4319	1:0cda9638:1847657
+Data\Npc\_Canvas\_Canvas.ini	0:00a36b5a
+Data\Npc\_Canvas\_Canvas.wz	0:880b9b62
+Data\Npc\_Canvas\_Canvas_000.wz	0:d82e6ecb
+Data\Npc\_Canvas\_Canvas_001.wz	0:6ad51657
+Data\Npc\_Canvas\_Canvas_002.wz	0:318555e0
+Data\Npc\_Canvas\_Canvas_003.wz	0:3e8636ba
+Data\Npc\_Canvas\_Canvas_004.wz	0:4d5d0284	1:2f48906f:95837248
+Data\Npc\_Canvas\_Canvas_005.wz	0:2210e7d7	1:a4371176:13203554
+Data\Npc\_Canvas\_Canvas_006.wz	0:ee5763fe
+Data\Npc\_Canvas\_Canvas_007.wz	0:22c5b2b1	1:202b5357:93818424
+Data\Npc\_Canvas\_Canvas_008.wz	0:1c34adc0
+Data\Npc\_Canvas\_Canvas_009.wz	0:e33b3cb5
+Data\Npc\_Canvas\_Canvas_010.wz	0:c863632b
+Data\Npc\_Canvas\_Canvas_011.wz	0:def3a7a9	1:17adf32b:99301654
+Data\Npc\_Canvas\_Canvas_012.wz	0:eaa19380
+Data\Npc\_Canvas\_Canvas_013.wz	0:a0a1dace
+Data\Npc\_Canvas\_Canvas_014.wz	0:c505f32f
+Data\Npc\_Canvas\_Canvas_015.wz	0:e50f549e	1:4cee2b15:97216313
+Data\Npc\_Canvas\_Canvas_016.wz	0:606ea43c	1:8920ae6e:95759053
+Data\Npc\_Canvas\_Canvas_017.wz	0:c2d305bc
+Data\Npc\_Canvas\_Canvas_018.wz	0:d7faff83
+Data\Npc\_Canvas\_Canvas_019.wz	0:20edf18a	1:b779a17c:99970628
+Data\Npc\_Canvas\_Canvas_020.wz	0:ba119a32	1:7460d37f:97674559
+Data\Npc\_Canvas\_Canvas_021.wz	0:b53a2ded
+Data\Npc\_Canvas\_Canvas_022.wz	0:1341b763
+Data\Npc\_Canvas\_Canvas_023.wz	0:8b024447
+Data\Npc\_Canvas\_Canvas_024.wz	0:b42d8a4e
+Data\Npc\_Canvas\_Canvas_025.wz	0:cedd7941
+Data\Npc\_Canvas\_Canvas_026.wz	0:cf0f9d88
+Data\Npc\_Canvas\_Canvas_027.wz	0:e013d233
+Data\Npc\_Canvas\_Canvas_028.wz	0:56b0d151
+Data\Npc\_Canvas\_Canvas_029.wz	0:8d4ffe6b
+Data\Npc\_Canvas\_Canvas_030.wz	0:2237bb07
+Data\Npc\_Canvas\_Canvas_031.wz	0:b4b5f42b
+Data\Npc\_Canvas\_Canvas_032.wz	0:13cbd50f
+Data\Npc\_Canvas\_Canvas_033.wz	0:68f67da4
+Data\Npc\_Canvas\_Canvas_034.wz	0:f21f9aec
+Data\Npc\_Canvas\_Canvas_035.wz	0:1496fc25
+Data\Npc\_Canvas\_Canvas_036.wz	0:5c3e3afa	1:5d735fa4:51251423
+Data\Npc\Npc.ini	0:a1a74cf3
+Data\Npc\Npc.wz	0:259a17b7
+Data\Npc\Npc_000.wz	0:398a12f1	1:d3fc43fd:29395769
+Data\Packs\digest.md5	0:f682240b	1:190ab9f0:585
+Data\Packs\Mob_00000.ms	0:8d60247e	1:8e17bc52:112027648
+Data\Packs\Mob_00001.ms	0:9577d415
+Data\Packs\Mob_00002.ms	0:d2ba25bf	1:2787f184:106802176
+Data\Packs\Skill_00000.ms	0:86d88a04	1:b9176ed5:109731840
+Data\Packs\Skill_00001.ms	0:d95d0024	1:25912289:144010240
+Data\Packs\Skill_00002.ms	0:99f196aa	1:2938ec4d:114609152
+Data\Packs\Skill_00003.ms	0:a94e96f3	1:3e8848c4:106927104
+Data\Packs\Skill_00004.ms	0:a7f111bb	1:cc23207a:108768256
+Data\Packs\Skill_00005.ms	0:8ef2ca60	1:b43ed629:109457408
+Data\Packs\Skill_00006.ms	0:ebbb9c37	1:cd22fdab:115078144
+Data\Packs\Skill_00007.ms	0:95614688	1:9d8b00a9:68884480
+Data\Quest\_Canvas\_Canvas.ini	0:a1a74cf3
+Data\Quest\_Canvas\_Canvas.wz	0:880b9b62
+Data\Quest\_Canvas\_Canvas_000.wz	0:850a96af
+Data\Quest\Quest.ini	0:a1a74cf3
+Data\Quest\Quest.wz	0:84c8fc8b
+Data\Quest\Quest_000.wz	0:3fd9286a
+Data\Quest\QuestData\QuestData.ini	0:a1a74cf3
+Data\Quest\QuestData\QuestData.wz	0:880b9b62
+Data\Quest\QuestData\QuestData_000.wz	0:fb84c7df	1:6447e357:29747097
+Data\Reactor\_Canvas\_Canvas.ini	0:a07fe074
+Data\Reactor\_Canvas\_Canvas.wz	0:880b9b62
+Data\Reactor\_Canvas\_Canvas_000.wz	0:bf0f649b
+Data\Reactor\_Canvas\_Canvas_001.wz	0:0efbf2e9
+Data\Reactor\Reactor.ini	0:a1a74cf3
+Data\Reactor\Reactor.wz	0:259a17b7
+Data\Reactor\Reactor_000.wz	0:7e5a8c18
+Data\Skill\_Canvas\_Canvas.ini	0:78900a8e	1:7948a609:17
+Data\Skill\_Canvas\_Canvas.wz	0:42ac3ae4	1:d4f73aa6:392
+Data\Skill\_Canvas\_Canvas_000.wz	0:6790a037	1:2653ac44:46500920
+Data\Skill\_Canvas\_Canvas_001.wz	0:89391470	1:97af5c15:95498586
+Data\Skill\_Canvas\_Canvas_002.wz	0:86ee40d9	1:7db07ae8:40486582
+Data\Skill\_Canvas\_Canvas_003.wz	0:8a5993ad	1:c854548e:108683439
+Data\Skill\_Canvas\_Canvas_004.wz	0:0b6a9330	1:12c4c656:95594174
+Data\Skill\_Canvas\_Canvas_005.wz	0:1623ce19	1:629d105d:49144895
+Data\Skill\_Canvas\_Canvas_006.wz	0:a6bca410	1:b12668e6:93764157
+Data\Skill\_Canvas\_Canvas_007.wz	0:ac470310	1:3d0068bf:135074105
+Data\Skill\_Canvas\_Canvas_008.wz	0:b76a8909	1:8a7e58b4:30423765
+Data\Skill\_Canvas\_Canvas_009.wz	0:da7b8a4e	1:6f9ebc62:75829349
+Data\Skill\_Canvas\_Canvas_010.wz	0:dc1a5652	1:5c0bfc7e:124439621
+Data\Skill\_Canvas\_Canvas_011.wz	0:fdaf94ed	1:10fbf4c0:46141397
+Data\Skill\_Canvas\_Canvas_012.wz	0:7a03e9c8	1:deef3cfc:94819389
+Data\Skill\_Canvas\_Canvas_013.wz	0:be8d72d4	1:d5edadca:166440430
+Data\Skill\_Canvas\_Canvas_014.wz	0:9f889854	1:3f951ab1:28470140
+Data\Skill\_Canvas\_Canvas_015.wz	0:ce2a36fb	1:eda4ea35:86324526
+Data\Skill\_Canvas\_Canvas_016.wz	0:682ef30a	1:47acc2ce:78825409
+Data\Skill\_Canvas\_Canvas_017.wz	0:a28ea712	1:743bbcbf:47655429
+Data\Skill\_Canvas\_Canvas_018.wz	0:91355809	1:63ce0aa8:111136281
+Data\Skill\_Canvas\_Canvas_019.wz	0:aec981e1	1:4aaaf0d9:99240124
+Data\Skill\_Canvas\_Canvas_020.wz	0:8810ad61	1:895f2ad0:94731666
+Data\Skill\_Canvas\_Canvas_021.wz	0:eb29f16e	1:a515c279:48590508
+Data\Skill\_Canvas\_Canvas_022.wz	0:fed97471	1:4be7f2f2:73256901
+Data\Skill\_Canvas\_Canvas_023.wz	0:5050ae44	1:879218f2:31061265
+Data\Skill\_Canvas\_Canvas_024.wz	0:d7daabb8	1:c7e99f06:93839405
+Data\Skill\_Canvas\_Canvas_025.wz	0:74035de3	1:6440cd23:69086246
+Data\Skill\_Canvas\_Canvas_026.wz	0:dfde2daf	1:d0cb428d:197403836
+Data\Skill\_Canvas\_Canvas_027.wz	0:32ea6b3e	1:cee505a0:38697604
+Data\Skill\_Canvas\_Canvas_028.wz	0:85df0251	1:3d639db1:94691195
+Data\Skill\_Canvas\_Canvas_029.wz	0:1cad962a	1:60c8652b:68552375
+Data\Skill\_Canvas\_Canvas_030.wz	0:ff9fa7e8	1:7a03dd4e:118530891
+Data\Skill\_Canvas\_Canvas_031.wz	0:80e15411	1:a83dfa63:27402876
+Data\Skill\_Canvas\_Canvas_032.wz	0:e043a3f0	1:f50e92ee:73699118
+Data\Skill\_Canvas\_Canvas_033.wz	0:c9b7dd89	1:8c2fc4e0:115673204
+Data\Skill\_Canvas\_Canvas_034.wz	0:2dc3ecd7	1:e91632ab:41320499
+Data\Skill\_Canvas\_Canvas_035.wz	0:23e26e5e	1:4550ff76:78051385
+Data\Skill\_Canvas\_Canvas_036.wz	0:c5a17385	1:f5b53d43:134887457
+Data\Skill\_Canvas\_Canvas_037.wz	0:2d343864	1:21aa2f6e:67890207
+Data\Skill\_Canvas\_Canvas_038.wz	0:2e2ec627	1:0fd2fd40:189297029
+Data\Skill\_Canvas\_Canvas_039.wz	0:a90b7fb8	1:8375ec8c:66952673
+Data\Skill\_Canvas\_Canvas_040.wz	0:1c0b5410	1:6270c319:58562055
+Data\Skill\_Canvas\_Canvas_041.wz	0:ca9166a4	1:0cef0e38:393978138
+Data\Skill\_Canvas\_Canvas_042.wz	0:0affb28c	1:0921a04d:84378954
+Data\Skill\_Canvas\_Canvas_043.wz	0:088553d6	1:06f8a3a8:98850044
+Data\Skill\_Canvas\_Canvas_044.wz	0:29de369f	1:49a91b30:187305004
+Data\Skill\_Canvas\_Canvas_045.wz	0:10b70f56	1:87c92c84:68371361
+Data\Skill\_Canvas\_Canvas_046.wz	0:b2fd0bcd	1:ba107460:228075655
+Data\Skill\_Canvas\_Canvas_047.wz	0:c98d12fe	1:63150538:83722714
+Data\Skill\_Canvas\_Canvas_048.wz	0:17aa751b	1:565dff9f:103454762
+Data\Skill\_Canvas\_Canvas_049.wz	0:7ccb8e27	1:587c956d:173574606
+Data\Skill\_Canvas\_Canvas_050.wz	0:678acddc	1:fde0b67b:42389731
+Data\Skill\_Canvas\_Canvas_051.wz	0:b768164d	1:919cc158:140603032
+Data\Skill\_Canvas\_Canvas_052.wz	0:5d941461	1:524e55be:32461581
+Data\Skill\_Canvas\_Canvas_053.wz	0:76b63358	1:e2222432:217603602
+Data\Skill\_Canvas\_Canvas_054.wz	0:0491c1de	1:df1cea87:94535349
+Data\Skill\_Canvas\_Canvas_055.wz	0:d36f326f	1:87207d65:51779924
+Data\Skill\_Canvas\_Canvas_056.wz	0:a3f0e29d	1:29526e6f:76125034
+Data\Skill\_Canvas\_Canvas_057.wz	0:f32adf3e	1:15fee66f:98710879
+Data\Skill\_Canvas\_Canvas_058.wz	0:654f843e	1:4ddac04d:98614410
+Data\Skill\_Canvas\_Canvas_059.wz	0:59cbe23f	1:e324c7e1:36034819
+Data\Skill\_Canvas\_Canvas_060.wz	0:6356e101	1:4f40e6a1:135380033
+Data\Skill\_Canvas\_Canvas_061.wz	0:6cabe104	1:f4719838:32916012
+Data\Skill\_Canvas\_Canvas_062.wz	0:adbfa65d	1:d8f919ea:83407521
+Data\Skill\_Canvas\_Canvas_063.wz	0:e800db57	1:f8a9630b:150215408
+Data\Skill\_Canvas\_Canvas_064.wz	0:b3a3ba2a	1:81850024:93271780
+Data\Skill\_Canvas\_Canvas_065.wz	0:50d4e4b6	1:33c69eb9:95013804
+Data\Skill\_Canvas\_Canvas_066.wz	0:5626062f	1:edba6138:54586940
+Data\Skill\_Canvas\_Canvas_067.wz	0:7c82433d	1:2a6b2a1e:73349405
+Data\Skill\_Canvas\_Canvas_068.wz	0:756b29e8	1:176e2f1b:42156049
+Data\Skill\_Canvas\_Canvas_069.wz	0:107b2c3f	1:42cbfdbf:141543818
+Data\Skill\_Canvas\_Canvas_070.wz	0:76660f1b	1:3f49825c:15539994
+Data\Skill\_Canvas\_Canvas_071.wz	0:36817311	1:a141a44f:110918879
+Data\Skill\_Canvas\_Canvas_072.wz	0:500e6bb2	1:be49d6ef:23978423
+Data\Skill\_Canvas\_Canvas_073.wz	0:b90fcb6d	1:c9a66e94:94846477
+Data\Skill\_Canvas\_Canvas_074.wz	0:b4cfd995	1:da20be4f:46520352
+Data\Skill\_Canvas\_Canvas_075.wz	0:bd7db602	1:4717eeb0:75909567
+Data\Skill\_Canvas\_Canvas_076.wz	0:e8a03285	1:0a91d4f1:136042926
+Data\Skill\_Canvas\_Canvas_077.wz	0:1aaca248	1:93b2f536:662146473
+Data\Skill\_Canvas\_Canvas_078.wz	0:4ddf5d07	1:f95d058d:698130907
+Data\Skill\_Canvas\_Canvas_079.wz	0:1751c74a	1:27111136:369507327
+Data\Skill\_Canvas\_Canvas_080.wz	0:d34b42d3	1:9454df74:433492714
+Data\Skill\_Canvas\_Canvas_081.wz	0:570e81cf	1:806bd708:419709223
+Data\Skill\_Canvas\_Canvas_082.wz	0:b9b3e020	1:c91c9e57:31402211
+Data\Skill\_Canvas\_Canvas_083.wz	0:0806da80	1:838c65e7:96185289
+Data\Skill\_Canvas\_Canvas_084.wz	0:6b01498d	1:1e4a193a:99181659
+Data\Skill\_Canvas\_Canvas_085.wz	0:627a538b	1:a33edba6:78856362
+Data\Skill\_Canvas\_Canvas_086.wz	0:7523efde	1:e2928b13:814484044
+Data\Skill\_Canvas\_Canvas_087.wz	0:5788dac6	1:6cdee9ed:53891276
+Data\Skill\_Canvas\_Canvas_088.wz	0:7841d6af	1:992f846f:93367246
+Data\Skill\_Canvas\_Canvas_089.wz	0:2212ab9b	1:7518ded2:29070751
+Data\Skill\_Canvas\_Canvas_090.wz	0:480cf128	1:f3780bce:144216958
+Data\Skill\_Canvas\_Canvas_091.wz	0:f31291b9	1:746e85bd:46120140
+Data\Skill\_Canvas\_Canvas_092.wz	0:f8d02e96	1:b6abaa49:168453889
+Data\Skill\_Canvas\_Canvas_093.wz	0:df546c47	1:e2dc07ae:24826665
+Data\Skill\_Canvas\_Canvas_094.wz	0:a013eac2	1:44a2d919:92623925
+Data\Skill\_Canvas\_Canvas_095.wz	0:ce7a98b4	1:efc47c9f:48622222
+Data\Skill\_Canvas\_Canvas_096.wz	0:3c46de58	1:866236ba:87112961
+Data\Skill\_Canvas\_Canvas_097.wz	0:8b7a4538	1:eb60f9ab:51527303
+Data\Skill\_Canvas\_Canvas_098.wz	0:6dac1737	1:d08dd959:151912504
+Data\Skill\_Canvas\_Canvas_099.wz	0:c3e3b8c3	1:e1c36993:44557900
+Data\Skill\_Canvas\_Canvas_100.wz	0:18f7deb7	1:c961c406:87027926
+Data\Skill\_Canvas\_Canvas_101.wz	0:586da6b3	1:83374d1d:78920850
+Data\Skill\_Canvas\_Canvas_102.wz	0:c0e0b997	1:3ab19a83:94027599
+Data\Skill\_Canvas\_Canvas_103.wz	0:928a8a57	1:7863b327:89948149
+Data\Skill\_Canvas\_Canvas_104.wz	0:0ef4c6f3	1:c0a31844:90325810
+Data\Skill\_Canvas\_Canvas_105.wz	0:1fa1b99d	1:a9abd894:89523504
+Data\Skill\_Canvas\_Canvas_106.wz	0:dec10556	1:b2ebe0a3:99608752
+Data\Skill\_Canvas\_Canvas_107.wz	0:8f7a869e	1:7359acf7:90088811
+Data\Skill\_Canvas\_Canvas_108.wz	0:fae95f6e	1:2a6b4ee9:127940361
+Data\Skill\_Canvas\_Canvas_109.wz	0:04bca766	1:e0eebf66:98535264
+Data\Skill\_Canvas\_Canvas_110.wz	0:f0fe07cd	1:2cd7a86d:159355351
+Data\Skill\_Canvas\_Canvas_111.wz	0:5b14c996	1:5eeaa41e:85509623
+Data\Skill\_Canvas\_Canvas_112.wz	0:6e98eb6d	1:4006971f:199360049
+Data\Skill\_Canvas\_Canvas_113.wz	0:375fb13a	1:234f4d37:120208925
+Data\Skill\_Canvas\_Canvas_114.wz	0:d886284c	1:3ca46aed:49160012
+Data\Skill\_Canvas\_Canvas_115.wz	0:ca0ed162	1:5f46e265:82269693
+Data\Skill\_Canvas\_Canvas_116.wz	0:0b9bf88b	1:02c0f566:188814402
+Data\Skill\_Canvas\_Canvas_117.wz	0:f5ebd8b1	1:ebb6fdd0:225494616
+Data\Skill\_Canvas\_Canvas_118.wz	0:0e9f16ec	1:3230f3c7:184471113
+Data\Skill\_Canvas\_Canvas_119.wz	0:fdc41cb7	1:6c3663e9:332458057
+Data\Skill\_Canvas\_Canvas_120.wz	0:b1c612b2	1:c9535bdb:52251538
+Data\Skill\_Canvas\_Canvas_121.wz	0:6a43a2ad	1:d8ce6f86:154373249
+Data\Skill\_Canvas\_Canvas_122.wz	0:279807b3	1:c62c2e2a:6495170
+Data\Skill\_Canvas\_Canvas_123.wz	1:fe44a4b1:291433887
+Data\Skill\Dragon\_Canvas\_Canvas.ini	0:a07fe074
+Data\Skill\Dragon\_Canvas\_Canvas.wz	0:1295b249	1:8113aaf6:392
+Data\Skill\Dragon\_Canvas\_Canvas_000.wz	0:e9c2d290	1:7971038c:47870704
+Data\Skill\Dragon\_Canvas\_Canvas_001.wz	0:bb597540	1:ee3ca728:108934334
+Data\Skill\Dragon\Dragon.ini	0:e413a317
+Data\Skill\Dragon\Dragon.wz	0:8f61797a	1:950e9484:432
+Data\Skill\MobSkill\_Canvas\_Canvas.ini	0:a21615fd
+Data\Skill\MobSkill\_Canvas\_Canvas.wz	0:84e48d48	1:5de970d7:392
+Data\Skill\MobSkill\_Canvas\_Canvas_000.wz	0:2f905a5e	1:22ec23da:84806790
+Data\Skill\MobSkill\_Canvas\_Canvas_001.wz	0:c9156da8	1:86b19d73:96086201
+Data\Skill\MobSkill\_Canvas\_Canvas_002.wz	0:cbc98424	1:9292ab20:55958947
+Data\Skill\MobSkill\MobSkill.ini	0:e413a317
+Data\Skill\MobSkill\MobSkill.wz	0:35dbdf92	1:64eb1a2e:432
+Data\Skill\Skill.ini	0:e413a317
+Data\Skill\Skill.wz	0:481aeb03	1:6dc397fb:512
+Data\Sound\Sound.ini	0:c3fd5688
+Data\Sound\Sound.wz	0:880b9b62
+Data\Sound\Sound_000.wz	0:284f9223	1:1f143d7c:94447311
+Data\Sound\Sound_001.wz	0:034a6837	1:291550ee:84083087
+Data\Sound\Sound_002.wz	0:10513b59	1:c117ec59:97853791
+Data\Sound\Sound_003.wz	0:4ae5dc3b	1:4c367e9a:99562249
+Data\Sound\Sound_004.wz	0:0aa507b0
+Data\Sound\Sound_005.wz	0:dc3b43d8
+Data\Sound\Sound_006.wz	0:f53b3b10
+Data\Sound\Sound_007.wz	0:22c1ad5a
+Data\Sound\Sound_008.wz	0:e3eb0c23
+Data\Sound\Sound_009.wz	0:53bf71a0
+Data\Sound\Sound_010.wz	0:9c0c081a
+Data\Sound\Sound_011.wz	0:aa6431dc
+Data\Sound\Sound_012.wz	0:bc92518c
+Data\Sound\Sound_013.wz	0:05f3569c
+Data\Sound\Sound_014.wz	0:7d53e3e0
+Data\Sound\Sound_015.wz	0:96e14ea3
+Data\Sound\Sound_016.wz	0:6092ed6b
+Data\Sound\Sound_017.wz	0:7808045f
+Data\Sound\Sound_018.wz	0:c4db2256
+Data\Sound\Sound_019.wz	0:9d8d7122
+Data\Sound\Sound_020.wz	0:844bb84f
+Data\Sound\Sound_021.wz	0:eefbdeae	1:3c1d6fee:88013129
+Data\Sound\Sound_022.wz	0:e2188d3a
+Data\Sound\Sound_023.wz	0:e6256f44	1:823abe81:245327951
+Data\Sound\Sound_024.wz	0:653efa70	1:82ccfba6:95385133
+Data\Sound\Sound_025.wz	0:185a9c4d	1:a59808a3:139290268
+Data\Sound\Sound_026.wz	0:60b9f556
+Data\Sound\Sound_027.wz	0:d29b9dfa
+Data\Sound\Sound_028.wz	0:c9bafa26
+Data\Sound\Sound_029.wz	0:289031e4	1:2620f039:252756607
+Data\Sound\Sound_030.wz	0:99ab8ae9	1:3419c332:326655183
+Data\Sound\Sound_031.wz	0:217849c6
+Data\Sound\Sound_032.wz	0:56e14ae0	1:3f0770a6:112347607
+Data\Sound\Sound_033.wz	0:c9f7872f	1:722a68e6:41229328
+Data\Sound\Sound_034.wz	0:72c8ca2b
+Data\Sound\Sound_035.wz	0:3bf28da9
+Data\Sound\Sound_036.wz	0:8ca85bd4
+Data\Sound\Sound_037.wz	0:11012bd3
+Data\Sound\Sound_038.wz	0:310aa598
+Data\Sound\Sound_039.wz	0:cfb369a7
+Data\Sound\Sound_040.wz	0:452e8dc3
+Data\Sound\Sound_041.wz	0:f193bf50
+Data\Sound\Sound_042.wz	0:bd7c0772
+Data\Sound\Sound_043.wz	0:be8d7848
+Data\Sound\Sound_044.wz	0:8a12cf91
+Data\Sound\Sound_045.wz	0:ff217acf
+Data\Sound\Sound_046.wz	0:27a1c712
+Data\Sound\Sound_047.wz	0:3b71d6e6
+Data\Sound\Sound_048.wz	0:4c49d4fe
+Data\Sound\Sound_049.wz	0:749a755a
+Data\Sound\Sound_050.wz	0:0ca32cf1
+Data\Sound\Sound_051.wz	0:9b066ff9
+Data\Sound\Sound_052.wz	0:0748e258
+Data\Sound\Sound_053.wz	0:86c35a8c
+Data\Sound\Sound_054.wz	0:eb388394
+Data\String\String.ini	0:a1a74cf3
+Data\String\String.wz	0:6c625c7f	1:3fa44927:392	2:56c4e002:392
+Data\String\String_000.wz	0:106d2ae2	1:79f3f956:15037016	2:df17e847:15037040
+Data\TamingMob\TamingMob.ini	0:a1a74cf3
+Data\TamingMob\TamingMob.wz	0:880b9b62
+Data\TamingMob\TamingMob_000.wz	0:a076d354
+Data\UI\_Canvas\_Canvas.ini	0:d9c5b678
+Data\UI\_Canvas\_Canvas.wz	0:201f0445	1:a4137482:392	3:cb5ea48e:392
+Data\UI\_Canvas\_Canvas_000.wz	0:c2f5026a	1:a351aa99:82202058	3:7c6a0f44:82202058
+Data\UI\_Canvas\_Canvas_001.wz	0:fea1b880	1:75cc714a:211835077	3:3e2469dc:211835077
+Data\UI\_Canvas\_Canvas_002.wz	0:c3512c12	1:9a3afa57:82377348	3:1a975352:82377348
+Data\UI\_Canvas\_Canvas_003.wz	0:44d1be3c	1:f8d63161:250582116	3:d618a898:250582116
+Data\UI\_Canvas\_Canvas_004.wz	0:8162b9e1	1:3f15399b:96748763	3:6799c4d5:96748763
+Data\UI\_Canvas\_Canvas_005.wz	0:0b12e689	1:5afd7566:93325766	3:c79397ac:93325766
+Data\UI\_Canvas\_Canvas_006.wz	0:53933e0a	1:a9afcf55:95375633	3:204bda20:95375633
+Data\UI\_Canvas\_Canvas_007.wz	0:c0c763a9	1:e27852de:81332831	3:50475f5d:81332831
+Data\UI\_Canvas\_Canvas_008.wz	0:b344690f	1:db396d82:70138017	3:d5fcfb36:70138017
+Data\UI\_Canvas\_Canvas_009.wz	0:ee92f111	1:7f634951:116396910	3:fe7786f9:116396910
+Data\UI\_Canvas\_Canvas_010.wz	0:11152603	1:d3814882:65446098	3:1ea4bc59:65446098
+Data\UI\_Canvas\_Canvas_011.wz	0:53a299ae	1:ed2b7639:85116691	3:f57f03ad:85116691
+Data\UI\_Canvas\_Canvas_012.wz	0:4c6f5273	1:d15f712f:127425490	3:b579d210:127425490
+Data\UI\_Canvas\_Canvas_013.wz	0:6948a4c8	1:e1148857:95207761	3:2935a22c:95207761
+Data\UI\_Canvas\_Canvas_014.wz	0:2408b63b	1:1da42f26:19557170	3:81481a2a:19557170
+Data\UI\_Canvas\_Canvas_015.wz	0:579cc3aa	1:a57e109f:121104077	3:b6d60d3d:121104077
+Data\UI\_Canvas\_Canvas_016.wz	0:cf1af3d1	1:02082853:85306027	3:08304283:85306027
+Data\UI\_Canvas\_Canvas_017.wz	0:789ba383	1:805a737c:65077513	3:d1ea8d7c:65077513
+Data\UI\_Canvas\_Canvas_018.wz	0:1a0e8066	1:d984de3b:52564534	3:deace485:52564534
+Data\UI\_Canvas\_Canvas_019.wz	0:cabf67a7	1:c68d8912:232437512	3:83a352b6:232437512
+Data\UI\_Canvas\_Canvas_020.wz	0:3202be41	1:59235d6d:45091946	3:3d871d67:45091946
+Data\UI\_Canvas\_Canvas_021.wz	0:b6b3a0c4	1:c63fec74:75097506	3:96199293:75097506
+Data\UI\UI.ini	0:a1a74cf3
+Data\UI\UI.wz	0:722db05a	1:83fa39a7:432	3:ba0f8982:432
+Data\UI\UI_000.wz	0:7baae803	1:965e64db:77381344	3:349397c9:77381344
+discord_partner_sdk.dll	0:da9a166a
+GameLauncher.exe	0:46d17607
+gamescale.nm64.dll	0:12893b35	1:30024ecb:468960
+gamescale64.dll	0:dc0c4689	1:024cbdba:34841056
+Gr2D_DX11.dll	0:536c67c3	1:f3ced845:5274080
+HybridCore64.dll	0:b6b00e7b
+jypc.dll	0:8ce6e666
+libcurl.dll	0:b359ac07
+LSFG.dll	0:6ddb24d7
+MachineIdLib.dll	0:d4177347
+MapleExplorer.exe	0:41a86843
+MapleResource.ini	0:d33f39ac	1:0e8f6f52:21	2:290d69f9:21	3:d33f39ac:21	4:f537d414:21
+MapleRestarter.exe	0:4fa1b30b
+MapleSecurePC64.dll	0:0b72c7dd
+MapleStory.exe	0:acf336cd	1:fd794d23:156643296	2:a9f3cd81:156369376	3:b50ab78c:156634080	4:bc63a3af:156088288
+MapleStory.ini	0:a9028c7a
+NameSpace.dll	0:cbafcec0	1:3ae1c7f7:2700768
+NexonAnalytics64.dll	0:c7997269
+NGClient64.aes	0:f2b9d14d	1:1843acf5:11825504
+nmcogame64.dll	0:caf3bd1b	1:868a85e3:468960
+nugu64.dll	0:2119e468
+NxOverlay\chrome_100_percent.pak	0:26ef7b52	1:ab8b6dc0:695496
+NxOverlay\chrome_200_percent.pak	0:f9f53c1b	1:6abc4051:1197075
+NxOverlay\chrome_elf.dll	0:e59c229f	1:ce74fa0f:2806752
+NxOverlay\CrashReporter_64.dll	0:0dd9217d
+NxOverlay\d3dcompiler_47.dll	0:bd120da1	1:83ab47b8:4741488
+NxOverlay\DwarfAxe.exe	0:ece8a9d9	1:22367f45:1141240	3:9be10f0e:1144816
+NxOverlay\icudtl.dat	0:d2ebac14	1:cec5a39d:10876560
+NxOverlay\libcef.dll	0:0575b7d5	1:c4cbe6ac:275772896
+NxOverlay\libEGL.dll	0:29cc73fe	1:f0091c59:518112
+NxOverlay\libGLESv2.dll	0:893cbbab	1:8bc25f47:7903712
+NxOverlay\locales\af.pak	0:8c9870e0	1:fac2d9b3:639422
+NxOverlay\locales\af_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\af_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\af_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\am.pak	0:92777568	1:9705fa54:1033022
+NxOverlay\locales\am_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\am_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\am_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\ar.pak	0:e6f95a86	1:643bb5e8:1142021
+NxOverlay\locales\ar_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\ar_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\ar_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\bg.pak	0:71130807	1:0852477f:1181966
+NxOverlay\locales\bg_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\bg_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\bg_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\bn.pak	0:c7b84c5b	1:fb7004fd:1514246
+NxOverlay\locales\bn_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\bn_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\bn_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\ca.pak	0:79f854fa	1:6e530717:727711
+NxOverlay\locales\ca_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\ca_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\ca_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\cs.pak	0:14b0f311	1:afbd3a66:745906
+NxOverlay\locales\cs_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\cs_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\cs_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\da.pak	0:3a3d4c6a	1:0f91c081:674130
+NxOverlay\locales\da_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\da_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\da_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\de.pak	0:d1c33469	1:0de7e0ca:729490
+NxOverlay\locales\de_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\de_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\de_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\el.pak	0:595ff091	1:a517b033:1297613
+NxOverlay\locales\el_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\el_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\el_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\en-GB.pak	0:012d5950	1:0a8a7cb3:583139
+NxOverlay\locales\en-GB_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\en-GB_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\en-GB_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\en-US.pak	0:7f9c8c9e	1:cfd1ae96:589822
+NxOverlay\locales\en-US_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\en-US_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\en-US_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\es-419.pak	0:792b06e6	1:b7e0a1f5:713478
+NxOverlay\locales\es-419_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\es-419_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\es-419_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\es.pak	0:4f6d4b0c	1:fface229:708281
+NxOverlay\locales\es_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\es_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\es_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\et.pak	0:4af850f7	1:7a65fa04:648586
+NxOverlay\locales\et_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\et_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\et_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\fa.pak	0:7b87ac05	1:b47f7f2d:1064499
+NxOverlay\locales\fa_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\fa_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\fa_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\fi.pak	0:f91c7745	1:dff1892f:658247
+NxOverlay\locales\fi_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\fi_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\fi_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\fil.pak	0:01cca472	1:86b8d48b:745096
+NxOverlay\locales\fil_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\fil_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\fil_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\fr.pak	0:26b10647	1:017063b9:772237
+NxOverlay\locales\fr_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\fr_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\fr_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\gu.pak	0:b4b70c88	1:3e5235e3:1501647
+NxOverlay\locales\gu_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\gu_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\gu_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\he.pak	0:4c550582	1:a56540e6:936065
+NxOverlay\locales\he_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\he_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\he_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\hi.pak	0:138be4fa	1:3fbc3859:1601753
+NxOverlay\locales\hi_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\hi_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\hi_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\hr.pak	0:173d9e7c	1:7c98325f:718702
+NxOverlay\locales\hr_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\hr_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\hr_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\hu.pak	0:8ad48db3	1:1d6b0e3e:769059
+NxOverlay\locales\hu_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\hu_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\hu_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\id.pak	0:c3a2dbb7	1:5e9b7784:638360
+NxOverlay\locales\id_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\id_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\id_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\it.pak	0:ccee1be4	1:e604ca7b:704161
+NxOverlay\locales\it_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\it_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\it_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\ja.pak	0:735e2918	1:5434b9b9:853636
+NxOverlay\locales\ja_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\ja_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\ja_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\kn.pak	0:80ccec29	1:c1f715fc:1718425
+NxOverlay\locales\kn_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\kn_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\kn_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\ko.pak	0:75be2957	1:3ab953ce:724005
+NxOverlay\locales\ko_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\ko_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\ko_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\lt.pak	0:09418eea	1:522d9363:781813
+NxOverlay\locales\lt_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\lt_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\lt_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\lv.pak	0:0555df38	1:c5589a20:779066
+NxOverlay\locales\lv_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\lv_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\lv_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\ml.pak	0:28f6e502	1:93ed6897:1766476
+NxOverlay\locales\ml_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\ml_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\ml_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\mr.pak	0:bd3efa59	1:fd65a0d7:1468002
+NxOverlay\locales\mr_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\mr_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\mr_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\ms.pak	0:d6b22ea7	1:0404d496:671255
+NxOverlay\locales\ms_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\ms_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\ms_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\nb.pak	0:c318d0e6	1:1a450368:641857
+NxOverlay\locales\nb_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\nb_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\nb_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\nl.pak	0:a55d3c6e	1:b03f719a:668543
+NxOverlay\locales\nl_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\nl_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\nl_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\pl.pak	0:38959fc3	1:1eac30d1:747145
+NxOverlay\locales\pl_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\pl_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\pl_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\pt-BR.pak	0:36746a23	1:3227cfae:699896
+NxOverlay\locales\pt-BR_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\pt-BR_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\pt-BR_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\pt-PT.pak	0:e8eac06b	1:20be24f5:705044
+NxOverlay\locales\pt-PT_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\pt-PT_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\pt-PT_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\ro.pak	0:96aaae59	1:8bb6d89b:730864
+NxOverlay\locales\ro_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\ro_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\ro_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\ru.pak	0:296b29f8	1:071976fc:1207133
+NxOverlay\locales\ru_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\ru_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\ru_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\sk.pak	0:98295f6c	1:e40a0e58:757660
+NxOverlay\locales\sk_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\sk_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\sk_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\sl.pak	0:dbd374f9	1:e874bec8:726012
+NxOverlay\locales\sl_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\sl_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\sl_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\sr.pak	0:2c4b95da	1:1ba42b43:1114855
+NxOverlay\locales\sr_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\sr_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\sr_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\sv.pak	0:79ef0cb8	1:12263cc9:650505
+NxOverlay\locales\sv_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\sv_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\sv_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\sw.pak	0:8c8aa8bb	1:df227a7b:687813
+NxOverlay\locales\sw_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\sw_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\sw_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\ta.pak	0:e9ae7e64	1:e78efaa2:1761268
+NxOverlay\locales\ta_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\ta_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\ta_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\te.pak	0:a59982af	1:568ba60d:1628512
+NxOverlay\locales\te_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\te_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\te_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\th.pak	0:99a10d4a	1:d8e65602:1370173
+NxOverlay\locales\th_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\th_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\th_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\tr.pak	0:62f44235	1:e97d8885:700451
+NxOverlay\locales\tr_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\tr_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\tr_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\uk.pak	0:76796a0c	1:71f4d7de:1213153
+NxOverlay\locales\uk_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\uk_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\uk_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\ur.pak	0:2bb3f629	1:f0286749:1047139
+NxOverlay\locales\ur_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\ur_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\ur_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\vi.pak	0:4c4113c9	1:09535e06:833410
+NxOverlay\locales\vi_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\vi_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\vi_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\zh-CN.pak	0:5de77a93	1:b2b7ee89:595931
+NxOverlay\locales\zh-CN_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\zh-CN_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\zh-CN_NEUTER.pak	1:81837f74:18
+NxOverlay\locales\zh-TW.pak	0:3f9597a7	1:f6e4738f:590204
+NxOverlay\locales\zh-TW_FEMININE.pak	1:81837f74:18
+NxOverlay\locales\zh-TW_MASCULINE.pak	1:81837f74:18
+NxOverlay\locales\zh-TW_NEUTER.pak	1:81837f74:18
+NxOverlay\resources.pak	0:d82a9abb	1:b31e6217:16130228
+NxOverlay\snapshot_blob.bin	1:-
+NxOverlay\v8_context_snapshot.bin	0:e5dca3ef	1:2fed6385:740048
+NxOverlay\vk_swiftshader.dll	0:14e3dd21	1:b4eca31e:5446624
+NxOverlay\vk_swiftshader_icd.json	0:98ff52a0
+NxOverlay\vulkan-1.dll	0:9290da6c	1:50f37192:973280
+NxOverlay_x64.dll	0:a1f048af	1:55469fc2:519672	3:e379c33b:520696
+PCOM.dll	0:96c6214e	1:9d8f5ce9:1116640
+ResMan.dll	0:3d7d0e56	1:714f0834:800224
+Setup.exe	0:b2829cb8
+Shape2D.dll	0:9051e99e	1:a914bc58:776672
+Sound.dll	0:335a2af7	1:272dd59f:922592
+WzMss.dll	0:02d89ced	1:d04a67c9:365536
+ZLZ64.dll	0:6f4cabce	1:539a4a2f:629728

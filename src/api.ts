@@ -4,7 +4,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open } from "@tauri-apps/plugin-dialog";
 
 /** Which client: the live game, or the test world. */
 export type ServerId = "live" | "test";
@@ -14,7 +13,7 @@ export type Step = "download" | "verifyPatch" | "verifyInstall" | "trial" | "reb
 export type Settings = {
   /** Apply a patch as soon as one is found, without waiting for the button. */
   autoPatch: boolean;
-  /** Say so when the game's maintenance is over or has been extended. */
+  /** Say so when the game's maintenance has begun, has been extended or is over. */
   maintenanceAlert: boolean;
   /** Start the game by itself once a patch is done and the game can be played. */
   autoStart: boolean;
@@ -22,7 +21,7 @@ export type Settings = {
   exitAfterStart: boolean;
   /** Closing the window only puts it away; the app stays at work next to the clock. */
   background: boolean;
-  /** Replace game files as they are built when the drive has no room to build them all first. */
+  /** The way of patching that was chosen: every run replaces game files as it builds them. */
   immediate: boolean;
 };
 
@@ -53,7 +52,8 @@ type Lamp = {
 
 /** One line of the ready screen. The page goes by `kind` for what the line offers beside its words. */
 export type Row = {
-  kind: "folder" | "running" | "writable" | "space" | "recovery" | "leftover" | "patchFile";
+  /** A line of kind `way` is shown on the page's own line for the choice of the way of patching. */
+  kind: "folder" | "running" | "writable" | "space" | "recovery" | "way" | "leftover" | "patchFile";
   label: string;
   /** A check that passed or did not; `null` for a line that is no check. */
   ok: boolean | null;
@@ -67,18 +67,23 @@ type Failure = { id: number; title: string; message: string | null; details: str
 
 /** The run that is on a client's screen: the one at work, or one that has ended and was not put away. */
 type Run = {
-  /** The patch file the user picked for it; `null` for the patch from the server. */
+  /** The address the user gave for its patch; `null` for the patch the app found. */
   source: string | null;
   label: string | null;
   /** The stop was asked for by closing the window; the app goes once the run has stopped. */
   leaving: boolean;
+  /**
+   * The window was closed on the run, and the user is to be asked whether it is to go on
+   * with the app next to the clock. Until the backend has their answer.
+   */
+  asking: boolean;
   percent: number;
   step: Step | null;
   /** Bytes done and total within the step, and how many of them this run worked for itself. */
   done: number;
   total: number;
   worked: number;
-  /** What the run is working on, as in "생성중: Map001.wz". */
+  /** What the run is working on, as in "생성 중: Map001.wz". */
   activity: string;
   failure: Failure | null;
 };
@@ -102,6 +107,11 @@ export type SiteView = {
   title: string;
   current: string | null;
   latest: string | null;
+  /**
+   * The address the user is given to begin from when they state where the patch is: that of
+   * the patch the app found, or where the next one would be. Empty where neither is known.
+   */
+  patchAddress: string;
   /** When the server last answered a check, in milliseconds since 1970. */
   checkedAt: number | null;
   lamp: Lamp | null;
@@ -109,6 +119,11 @@ export type SiteView = {
   rows: Row[];
   customDir: boolean;
   halfPatched: boolean;
+  /**
+   * Removing what a run left cannot be made good by the app: the folder is partly new, or
+   * the record of an apply that was cut off cannot be read. The user is asked first.
+   */
+  discardAsks: boolean;
   phase: "ready" | "starting" | "running" | "stopping" | "paused" | "failed" | "done";
   run: Run | null;
   /** What the big figure shows; `null` draws "-". */
@@ -141,8 +156,16 @@ export type Progress = {
   activity: string;
 };
 
-/** Why a run was not begun. The first of `messages` is the one to lead with. */
-export type Refusal = { kind: "blocked" | "busy" | "outdated" | "nothing" | "notPatch"; messages: string[] };
+/**
+ * Why a run was not begun. The first of `messages` is the one to lead with. With `address`
+ * the address the user gave is not one a patch is fetched from, or no patch is there. With
+ * `ask` it is Nexon's and not among the game's own patch files: the one message is the
+ * question, and the run waits for the user's yes.
+ */
+export type Refusal = {
+  kind: "blocked" | "busy" | "outdated" | "nothing" | "address" | "ask";
+  messages: string[];
+};
 
 /** False when the page is opened in a plain browser (`yarn dev`) instead of the app. */
 const inApp = "__TAURI_INTERNALS__" in window;
@@ -163,7 +186,16 @@ export const defaultSettings: Settings = {
  */
 const folder: Row = { kind: "folder", label: "설치 경로", ok: true, detail: "C:\\Nexon\\Maple", message: "" };
 const space: Row = { kind: "space", label: "여유 공간", ok: true, detail: "160.0 GB", message: "" };
-const patchFile: Row = { kind: "patchFile", label: "패치 파일", ok: true, detail: "1,229 MB", message: "" };
+const patchFile: Row = {
+  kind: "patchFile",
+  label: "패치 파일",
+  ok: true,
+  detail: "00421to00422.patch · 1,229 MB",
+  message: "",
+};
+/** Where the live game's patch to 1.2.422 is published, and the test world's to 1.2.208. */
+const patchAt = "https://maplestory.dn.nexoncdn.co.kr/Patch/00422/00421to00422.patch";
+const testPatchAt = "https://maplestory.dn.nexoncdn.co.kr/PatchT/01208/01207to01208.patch";
 const noPatchFile: Row = { ...patchFile, ok: null, detail: "" };
 const gameOpen: Row = {
   kind: "running",
@@ -179,17 +211,25 @@ const notRestored: Row = {
   detail: "실패",
   message: "이전 패치를 복구하지 못했습니다.",
 };
+const journalUnreadable: Row = {
+  kind: "recovery",
+  label: "패치 복구",
+  ok: false,
+  detail: "작업 기록 손상",
+  message: "이전 패치 작업 기록이 손상되었습니다.\n공식 런처로 게임을 복구해 주세요.",
+};
 const leftover: Row = { kind: "leftover", label: "이전 패치 작업", ok: null, detail: "12.3 GB", message: "" };
 const building: Run = {
   source: null,
   label: "1.2.422",
   leaving: false,
+  asking: false,
   percent: 61.5,
   step: "rebuild",
   done: 6_442_450_944,
   total: 15_032_385_536,
   worked: 6_442_450_944,
-  activity: "생성중: Map001.wz",
+  activity: "생성 중: Map001.wz",
   failure: null,
 };
 /** A game folder with the patch to 1.2.422 on the server and nothing in the way. */
@@ -199,15 +239,17 @@ const withPatch: SiteView = {
   title: "메이플스토리",
   current: "1.2.421",
   latest: "1.2.422",
+  patchAddress: patchAt,
   checkedAt: Date.now(),
   lamp: { open: true, extended: false, until: null, season: true },
   rows: [folder, space, patchFile],
   customDir: false,
   halfPatched: false,
+  discardAsks: false,
   phase: "ready",
   run: null,
   percent: 0,
-  status: "새 패치 있음",
+  status: "새 클라이언트 패치 있음",
   statusBad: false,
   busy: false,
   summary: null,
@@ -216,6 +258,14 @@ const withPatch: SiteView = {
 };
 const scripted: Record<string, Partial<SiteView>> = {
   patch: {},
+  // A minor patch within the version that is installed.
+  minor: {
+    current: "1.2.421 (3)",
+    latest: "1.2.421 (4)",
+    patchAddress: "https://maplestory.dn.nexoncdn.co.kr/Patch/00421/Minor/03to04.patch",
+    rows: [folder, space, { ...patchFile, detail: "03to04.patch · 187 MB" }],
+    status: "새 마이너 패치 있음",
+  },
   checking: {
     latest: null,
     checkedAt: null,
@@ -245,6 +295,43 @@ const scripted: Record<string, Partial<SiteView>> = {
     statusBad: true,
     button: { kind: "download", enabled: true, primary: false },
   },
+  // The patch file is on the PC, and a run of it needs more room than the drive has by the
+  // way of patching that is chosen.
+  noroom: {
+    rows: [
+      folder,
+      {
+        ...space,
+        ok: false,
+        detail: "C: 필요 34.6 GB · 여유 15.8 GB",
+        message: "디스크 공간이 부족합니다.\nC: 여유 공간을 34.6 GB 이상 확보해 주세요. (현재 15.8 GB)",
+      },
+      leftover,
+      patchFile,
+    ],
+    percent: 12,
+    status: "패치 불가",
+    statusBad: true,
+    button: { kind: "resume", enabled: true, primary: false },
+  },
+  // 즉시 패치 is chosen on a drive that is not NTFS: no run begins there that way.
+  notntfs: {
+    rows: [
+      folder,
+      space,
+      {
+        kind: "way",
+        label: "패치 방식",
+        ok: false,
+        detail: "즉시 패치 불가",
+        message: "즉시 패치는 NTFS 드라이브에서만 사용할 수 있습니다.",
+      },
+      patchFile,
+    ],
+    status: "패치 불가",
+    statusBad: true,
+    button: { kind: "download", enabled: true, primary: false },
+  },
   leftover: {
     rows: [folder, space, leftover, patchFile],
     percent: 41,
@@ -262,13 +349,40 @@ const scripted: Record<string, Partial<SiteView>> = {
     current: null,
     rows: [folder, space, leftover, patchFile],
     halfPatched: true,
+    discardAsks: true,
     percent: 41,
     status: "중단된 패치 있음",
     button: { kind: "resume", enabled: true, primary: true },
   },
+  // An apply was cut off and the folder is being put back as it was: nothing is said of the
+  // folder until it is.
+  puttingback: {
+    current: null,
+    latest: null,
+    patchAddress: "",
+    checkedAt: null,
+    rows: [folder, space, leftover, noPatchFile],
+    status: "이전 패치 복구 대기",
+    busy: true,
+    button: { kind: "checkAgain", enabled: false, primary: false },
+  },
+  // An apply was cut off, its record cannot be read and the folder could not be put back
+  // without it: nothing to go on with, and what the run left can only be removed as it is.
+  journal: {
+    current: null,
+    latest: null,
+    patchAddress: "",
+    checkedAt: null,
+    rows: [folder, space, journalUnreadable, leftover, noPatchFile],
+    discardAsks: true,
+    status: "작업 기록 손상",
+    statusBad: true,
+    button: { kind: "checkAgain", enabled: true, primary: false },
+  },
   notinstalled: {
     current: null,
     latest: null,
+    patchAddress: "",
     checkedAt: null,
     lamp: null,
     rows: [{ ...folder, ok: false, detail: "찾을 수 없음", message: "메이플스토리 설치 경로를 찾을 수 없습니다." }],
@@ -292,9 +406,17 @@ const scripted: Record<string, Partial<SiteView>> = {
   },
   downloading: {
     phase: "running",
-    run: { ...building, percent: 12, step: "download", done: 515_396_075, total: 1_288_490_189, activity: "다운로드중: 00421to00422.patch" },
+    run: { ...building, percent: 12, step: "download", done: 515_396_075, total: 1_288_490_189, activity: "다운로드 중: 00421to00422.patch" },
     percent: 12,
     status: "패치 파일 다운로드 중",
+    button: { kind: "pause", enabled: true, primary: false },
+  },
+  // The window was closed on the run: the user is asked whether it is to go on.
+  closing: {
+    phase: "running",
+    run: { ...building, asking: true },
+    percent: 61.5,
+    status: "새 게임 파일 생성 중",
     button: { kind: "pause", enabled: true, primary: false },
   },
   stopping: {
@@ -343,6 +465,7 @@ const scripted: Record<string, Partial<SiteView>> = {
   done: {
     phase: "done",
     current: "1.2.422",
+    patchAddress: "https://maplestory.dn.nexoncdn.co.kr/Patch/00423/00422to00423.patch",
     run: { ...building, percent: 100, activity: "" },
     rows: [folder, space, noPatchFile],
     percent: 100,
@@ -362,14 +485,16 @@ const testWithPatch: SiteView = {
   title: "메이플스토리 테스트월드",
   current: "1.2.207",
   latest: "1.2.208",
+  patchAddress: testPatchAt,
   lamp: null,
-  rows: [testFolder, space, patchFile],
+  rows: [testFolder, space, { ...patchFile, detail: "01207to01208.patch · 1,229 MB" }],
 };
 /** The test world on a PC that does not have it, which is most: there is no figure and nothing to say of it. */
 const testNotInstalled: SiteView = {
   ...testWithPatch,
   current: null,
   latest: null,
+  patchAddress: "",
   checkedAt: null,
   rows: [
     { ...folder, ok: false, detail: "찾을 수 없음", message: "메이플스토리 테스트월드 설치 경로를 찾을 수 없습니다." },
@@ -389,6 +514,7 @@ const worlds: Record<string, SiteView[]> = {
     {
       ...testWithPatch,
       current: null,
+      patchAddress: "",
       checkedAt: null,
       rows: [testFolder, space, noPatchFile],
       status: "현재 버전 확인 불가",
@@ -402,6 +528,7 @@ const worlds: Record<string, SiteView[]> = {
     {
       ...testWithPatch,
       current: "1.2.208",
+      patchAddress: "https://maplestory.dn.nexoncdn.co.kr/PatchT/01209/01208to01209.patch",
       lamp: { open: false, extended: false, until: null, season: false },
       rows: [testFolder, space, noPatchFile],
       percent: 100,
@@ -428,7 +555,8 @@ const browserSites = worlds[asked] ?? [{ ...withPatch, ...scripted[asked] }, tes
 const atWork = (site: SiteView) => site.phase === "starting" || site.phase === "running" || site.phase === "stopping";
 const browserView: AppView = {
   sites: browserSites,
-  settings: defaultSettings,
+  // On the screen that says a drive does not take the immediate way, that way is chosen.
+  settings: { ...defaultSettings, immediate: asked === "notntfs" },
   update: asked === "outdated" ? { latest: "0.2.0", required: true, message: null } : null,
   running: browserSites.find(atWork)?.server ?? null,
 };
@@ -443,6 +571,27 @@ function browserStart(server: ServerId) {
   const refusal: Refusal = { kind: "blocked", messages };
   return messages.length > 0 ? Promise.reject<void>(refusal) : Promise.resolve();
 }
+/**
+ * A start by address in the browser begins nothing either. The address is held against a
+ * likeness of the backend's rule, rough and for looking at only: each answer the page can
+ * get is there to be seen.
+ */
+function browserStartAt(server: ServerId, address: string) {
+  const turnedDown = (kind: Refusal["kind"], message: string) => {
+    const refusal: Refusal = { kind, messages: [message] };
+    return Promise.reject<void>(refusal);
+  };
+  const parts = /^https?:\/\/([a-z0-9.-]+)(\/[A-Za-z0-9._/-]+\.patch)$/.exec(address.trim());
+  if (!parts) return turnedDown("address", "패치 주소가 아닙니다.");
+  const [, host, path] = parts;
+  if (!/(^|\.)(nexoncdn\.co\.kr|nexon\.com)$/.test(host)) return turnedDown("address", "넥슨 패치 서버 주소가 아닙니다.");
+  const own = host === "maplestory.dn.nexoncdn.co.kr" && path.startsWith(server === "live" ? "/Patch/" : "/PatchT/");
+  if (!own) {
+    const game = browserSites.find((site) => site.server === server)?.title ?? "";
+    return turnedDown("ask", `${game} 패치 주소가 아닙니다.\n이 주소로 패치하시겠습니까?`);
+  }
+  return browserStart(server);
+}
 // Another address is another screen.
 if (!inApp) window.addEventListener("hashchange", () => window.location.reload());
 
@@ -450,36 +599,55 @@ if (!inApp) window.addEventListener("hashchange", () => window.location.reload()
 export const takeSnapshot = () => (inApp ? invoke<AppView>("snapshot") : Promise.resolve(browserView));
 export const setSettings = (settings: Settings) =>
   inApp ? invoke<void>("set_settings", { settings }) : Promise.resolve();
+/** Starts a patch of what the screen of `server` offers. Rejects with a `Refusal` when none is begun. */
+export const startPatch = (server: ServerId) =>
+  inApp ? invoke<void>("start_patch", { server }) : browserStart(server);
 /**
- * Starts a patch for `server`: of the patch file at `file` when one was picked, and of what
- * the screen offers otherwise. Rejects with a `Refusal` when none is begun.
+ * Starts a patch for `server` of the patch at `address`, which the user gave. Whether a patch
+ * is fetched from there is the backend's to decide. Rejects with a `Refusal` when no run is
+ * begun: as `ask` when the user is to be asked first.
  */
-export const startPatch = (server: ServerId, file: string | null = null) =>
-  inApp ? invoke<void>("start_patch", { server, file }) : browserStart(server);
+export const startPatchAt = (server: ServerId, address: string) =>
+  inApp ? invoke<void>("start_patch_at", { server, address }) : browserStartAt(server, address);
+/**
+ * Starts the patch at the address the user was just asked about: they said yes. Which
+ * address that is, the backend knows.
+ */
+export const confirmPatchAddress = (server: ServerId) =>
+  inApp ? invoke<void>("confirm_patch_address", { server }) : browserStart(server);
 export const stopPatch = (server: ServerId) => (inApp ? invoke<void>("stop_patch", { server }) : Promise.resolve());
+/**
+ * Answers the question the backend has the page ask when the window is closed on a run at
+ * work. With `background` the run goes on and the app is next to the clock for the time
+ * being, with `quit` the run is stopped and the app goes, and `stay` leaves everything as it
+ * is: the question was put aside.
+ */
+export const answerClose = (answer: "background" | "quit" | "stay") =>
+  inApp ? invoke<void>("answer_close", { answer }) : Promise.resolve();
 /** Puts the run that ended away and shows the ready screen again. */
 export const dismissRun = (server: ServerId) =>
   inApp ? invoke<void>("dismiss_run", { server }) : Promise.resolve();
 /** Has the server asked again at once, after a check that failed. */
 export const askAgain = (server: ServerId) => (inApp ? invoke<void>("check_again", { server }) : Promise.resolve());
 /**
- * Where a picked patch file was downloaded from, when that was somewhere other than Nexon:
- * the host name, or "" when only "from the internet" is known. `null` for anything else.
+ * Deletes what a paused or interrupted run left in the install folder. `confirmed` says that
+ * the user was asked and said yes, where they had to be asked. How it is deleted, the backend
+ * decides by what the folder is.
  */
-export const foreignOrigin = (file: string) =>
-  inApp ? invoke<string | null>("foreign_origin", { file }) : Promise.resolve(null);
-/** Deletes what a paused or interrupted run left in the install folder. */
-export const discardLeftovers = (server: ServerId) =>
-  inApp ? invoke<void>("discard_leftovers", { server }) : Promise.resolve();
+export const discardLeftovers = (server: ServerId, confirmed: boolean) =>
+  inApp ? invoke<void>("discard_leftovers", { server, confirmed }) : Promise.resolve();
 export const launchGame = (server: ServerId) => (inApp ? invoke<void>("launch_game", { server }) : Promise.resolve());
 /** Opens the official page that offers the game's installer. */
 export const openDownloadPage = (server: ServerId) =>
   inApp ? invoke<void>("open_download_page", { server }) : Promise.resolve();
 /** Opens the page a newer version of this app is downloaded from. Which page that is, the backend knows. */
 export const openReleasePage = () => (inApp ? invoke<void>("open_release_page") : Promise.resolve());
-/** Uses `path` as the install folder; `null` goes back to finding it automatically. */
-export const setInstallDir = (server: ServerId, path: string | null) =>
-  inApp ? invoke<void>("set_install_dir", { server, path }) : Promise.resolve();
+/** Lets the user pick the install folder of `server`, in a dialog the backend opens, and uses what they pick. */
+export const pickInstallDir = (server: ServerId) =>
+  inApp ? invoke<void>("pick_install_dir", { server }) : Promise.resolve();
+/** Goes back from a folder the user picked to the one that is found automatically. */
+export const resetInstallDir = (server: ServerId) =>
+  inApp ? invoke<void>("reset_install_dir", { server }) : Promise.resolve();
 /**
  * How the last run that finished went, as text to copy: the time each step took and what
  * kind of PC it ran on. `null` when no run has finished since the app was started.
@@ -510,15 +678,6 @@ export async function copyText(text: string) {
     return copied;
   }
 }
-
-/** Lets the user pick the install folder. Resolves to `null` when they cancel. */
-export const pickFolder = () => (inApp ? open({ directory: true }) : Promise.resolve(null));
-
-/** Lets the user pick a patch file. Resolves to `null` when they cancel. */
-export const pickPatchFile = () =>
-  inApp
-    ? open({ filters: [{ name: "패치 파일", extensions: ["patch", "exe"] }] })
-    : Promise.resolve(null);
 
 /**
  * Subscribes to what the backend says: of a client's screen whenever it changes, of a run

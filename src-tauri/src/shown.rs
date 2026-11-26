@@ -6,8 +6,10 @@
 
 use serde::Serialize;
 
+use crate::address::file_at;
 use crate::flow::{Facts, Phase};
 use crate::state::{CheckKind, Step};
+use crate::wording::PUT_BACK_FIRST;
 
 /// What the footer says while the app is too old to patch with. A start is turned down with
 /// the same words.
@@ -23,9 +25,12 @@ pub(crate) enum RowKind {
     Writable,
     Space,
     Recovery,
+    /// The way of patching that was chosen, where the drive does not take it. The page
+    /// shows it on its own line for the choice and not among the lines listed here.
+    Way,
     /// What a paused or interrupted run left in the install folder.
     Leftover,
-    /// The patch file the server has for the install.
+    /// The patch file a check found on the server for the install.
     PatchFile,
 }
 
@@ -37,6 +42,7 @@ impl From<CheckKind> for RowKind {
             CheckKind::Writable => RowKind::Writable,
             CheckKind::Space => RowKind::Space,
             CheckKind::Recovery => RowKind::Recovery,
+            CheckKind::Way => RowKind::Way,
         }
     }
 }
@@ -62,7 +68,7 @@ pub(crate) enum ButtonKind {
     Install,
     /// Starts the patch: 다운로드.
     Download,
-    /// Goes on with a run that was left unfinished: 패치 이어하기.
+    /// Goes on with a run that was left unfinished: 이어하기.
     Resume,
     /// Tries a run again that failed or was turned down: 다시 시도.
     Retry,
@@ -89,6 +95,14 @@ pub(crate) struct Button {
 pub(crate) struct Shown {
     /// The installed version. Right after a run it is the version that run patched to.
     pub(crate) current: Option<String>,
+    /// The newest version the server has for the folder, when that is known. What the
+    /// footer says of the install being up to date goes by the same; see
+    /// [`Facts::unanswered`].
+    pub(crate) latest: Option<String>,
+    /// The address the user is given to begin from when they state where the patch is
+    /// themselves: that of the patch the app found, and otherwise where the patch from the
+    /// installed version to the next one would be. Empty where neither is known.
+    pub(crate) address: String,
     /// What the ready screen lists, in order.
     pub(crate) rows: Vec<Row>,
     /// What the big figure and the bar show, 0 to 100. Nothing where there is no game
@@ -117,18 +131,29 @@ pub(crate) fn shown(facts: &Facts) -> Shown {
             facts.answer.is_some() && !facts.up_to_date() && (facts.blocked() || failed)
         }
     };
+    // An apply that was cut off is being undone. That is waited for, and is no bad news.
+    let putting_back = ready && facts.status.is_some_and(|status| status.putting_back);
     Shown {
         current: current(facts),
+        latest: facts.latest.map(str::to_owned),
+        address: address(facts),
         rows: rows(facts),
         percent: percent(facts),
         status: if held_back { UPDATE_FIRST.to_owned() } else { status(facts) },
-        status_bad: held_back || (ready && troubled) || facts.phase == Phase::Failed,
-        // Something is being waited for: the first answer from the server, or a run to stop.
+        status_bad: held_back || (ready && troubled && !putting_back) || facts.phase == Phase::Failed,
+        // Something is being waited for: the first answer from the server, a folder to be
+        // put back, or a run to stop.
         busy: (ready && facts.unanswered() && !facts.not_installed() && !facts.own_run() && !held_back)
+            || putting_back
             || facts.phase == Phase::Stopping,
         summary: summary(facts),
         button: button(facts),
     }
+}
+
+fn address(facts: &Facts) -> String {
+    let found = facts.target().map(|target| target.url.clone());
+    found.or_else(|| facts.status.and_then(|status| status.next_address.clone())).unwrap_or_default()
 }
 
 fn current(facts: &Facts) -> Option<String> {
@@ -162,7 +187,10 @@ fn rows(facts: &Facts) -> Vec<Row> {
             kind: RowKind::PatchFile,
             label: "패치 파일",
             ok: target.map(|_| true),
-            detail: target.map(|target| megabytes(target.size)).unwrap_or_default(),
+            // Which file it is, by the name it has on the server, and how large.
+            detail: target
+                .map(|target| format!("{} · {}", file_at(&target.url), megabytes(target.size)))
+                .unwrap_or_default(),
             message: String::new(),
         });
     }
@@ -213,6 +241,7 @@ fn status(facts: &Facts) -> String {
         Phase::Starting | Phase::Running => run.map_or("", |run| run.status),
         Phase::Done => "패치 완료",
         Phase::Ready if facts.not_installed() => "설치 경로 미확인",
+        Phase::Ready if facts.status.is_some_and(|status| status.putting_back) => PUT_BACK_FIRST,
         Phase::Ready if facts.own_run() => match facts.blocked() {
             true => "패치 불가",
             false => "중단된 패치 있음",
@@ -223,8 +252,12 @@ fn status(facts: &Facts) -> String {
             Some(error) => error,
             None if facts.blocked() => "패치 불가",
             None if facts.status.is_some_and(|status| status.resumable) && facts.can_start() => "중단된 패치 있음",
-            None if facts.target().is_none() => "패치 확인 불가",
-            None => "새 패치 있음",
+            None => match facts.target() {
+                None => "패치 확인 불가",
+                // Which kind of patch it is, is said with it: a new version, or a minor
+                // patch within the one that is installed.
+                Some(target) => return format!("새 {} 있음", target.kind()),
+            },
         },
     };
     word.to_owned()
@@ -253,8 +286,11 @@ fn button(facts: &Facts) -> Button {
     if ready && facts.not_installed() {
         return Button { kind: ButtonKind::Install, enabled: true, primary: true };
     }
+    // A folder that is being put back is at work: nothing is begun or asked about until it
+    // is back, and the button says so by being off, whichever it would be.
+    let putting_back = ready && facts.status.is_some_and(|status| status.putting_back);
     if ready && facts.ask_again() {
-        return Button { kind: ButtonKind::CheckAgain, enabled: true, primary: false };
+        return Button { kind: ButtonKind::CheckAgain, enabled: !putting_back, primary: false };
     }
     if (ready && facts.up_to_date()) || (done && facts.target().is_none()) {
         // The game is open, was just started, or what comes next is still being asked.
@@ -267,7 +303,7 @@ fn button(facts: &Facts) -> Button {
         // download. What is in the way does not disable the button: pressing it says what.
         let resuming = ready && facts.status.is_some_and(|status| status.resumable);
         let kind = if resuming { ButtonKind::Resume } else { ButtonKind::Download };
-        let able = facts.can_start() && !facts.outdated;
+        let able = facts.can_start() && !facts.outdated && !putting_back;
         return Button { kind, enabled: able, primary: able && !facts.blocked() };
     }
     if facts.phase.halted() {
@@ -287,8 +323,8 @@ mod tests {
     use super::*;
     use crate::flow::{Failure, Run};
     use crate::made::{
-        errored, game_at, game_open, half_patched, no_game_at, no_install, patch_to, resumable, run_of, short_of_room,
-        up_to_date,
+        GIVEN, GIVEN_WRONG, errored, game_at, game_open, half_patched, journal_unreadable, minor_patch_to, no_game_at,
+        no_install, patch_to, resumable, run_of, short_of_room, up_to_date,
     };
     use crate::state::{Availability, Check, Status};
 
@@ -296,6 +332,9 @@ mod tests {
     struct Scene {
         status: Option<Status>,
         answer: Option<Availability>,
+        /// The newest version the server was last seen to have. A scene has the one its
+        /// answer names, unless a test sets it apart.
+        latest: Option<String>,
         phase: Phase,
         run: Option<Run>,
         source: Option<String>,
@@ -309,6 +348,7 @@ mod tests {
         fn ready(status: Status, answer: Option<Availability>) -> Scene {
             Scene {
                 status: Some(status),
+                latest: answer.as_ref().and_then(|answer| answer.latest.clone()),
                 answer,
                 phase: Phase::Ready,
                 run: None,
@@ -323,7 +363,7 @@ mod tests {
         fn with_run(phase: Phase, change: impl FnOnce(&mut Run)) -> Scene {
             let mut run = run_of(None, Some("1.2.422"));
             (run.percent, run.step, run.status) = (61.5, Some(Step::Rebuild), "새 게임 파일 생성 중");
-            (run.done, run.total, run.activity) = (5, 10, "생성중: Map001.wz".to_owned());
+            (run.done, run.total, run.activity) = (5, 10, "생성 중: Map001.wz".to_owned());
             change(&mut run);
             Scene { phase, run: Some(run), ..Scene::ready(game_at(r"C:\Nexon\Maple"), Some(patch_to("1.2.422"))) }
         }
@@ -331,6 +371,9 @@ mod tests {
         /// The screen of a run that is done: 95 seconds, 718 files.
         fn done(answer: Option<Availability>) -> Scene {
             let mut scene = Scene::with_run(Phase::Done, |run| (run.percent, run.took, run.files) = (100.0, 95, 718));
+            if let Some(latest) = answer.as_ref().and_then(|answer| answer.latest.clone()) {
+                scene.latest = Some(latest);
+            }
             scene.answer = answer;
             scene
         }
@@ -340,6 +383,7 @@ mod tests {
             shown(&Facts {
                 status: self.status.as_ref(),
                 answer: self.answer.as_ref(),
+                latest: self.latest.as_deref(),
                 phase: self.phase,
                 run: self.run.as_ref(),
                 source: self.source.as_deref(),
@@ -350,6 +394,7 @@ mod tests {
                 outdated: self.outdated,
                 run_at_work: self.phase.at_work(),
                 open: Some(true),
+                update_asked: true,
                 quiet: self.quiet,
                 launching: self.launching,
             })
@@ -450,12 +495,11 @@ mod tests {
     }
 
     #[test]
-    fn a_run_of_a_picked_file_that_waits_says_that_a_patch_was_left_off() {
-        let file = r"D:\patches\00421to00422.patch";
-        let waits = Scene::ready(resumable(game(), Some(file), Some(41.0)), None);
+    fn a_run_by_an_address_that_waits_says_that_a_patch_was_left_off() {
+        let waits = Scene::ready(resumable(game(), Some(GIVEN), Some(41.0)), None);
         // The server has no say in that: no answer is waited for.
         assert_eq!(waits.footer(), word("중단된 패치 있음", false, false));
-        let blocked = Scene::ready(game_open(resumable(game(), Some(file), Some(41.0))), None);
+        let blocked = Scene::ready(game_open(resumable(game(), Some(GIVEN), Some(41.0))), None);
         assert_eq!(blocked.footer(), word("패치 불가", true, false));
     }
 
@@ -518,8 +562,26 @@ mod tests {
     }
 
     #[test]
-    fn a_patch_on_the_server_says_that_there_is_a_new_one() {
-        assert_eq!(Scene::ready(game(), Some(patch_to("1.2.422"))).footer(), word("새 패치 있음", false, false));
+    fn a_patch_to_a_new_version_on_the_server_says_that_there_is_a_new_client_patch() {
+        let offered = Scene::ready(game(), Some(patch_to("1.2.422")));
+        assert_eq!(offered.footer(), word("새 클라이언트 패치 있음", false, false));
+    }
+
+    #[test]
+    fn a_minor_patch_on_the_server_says_that_there_is_a_new_minor_patch() {
+        let offered = Scene::ready(game(), Some(minor_patch_to("1.2.421 (4)", 4)));
+        assert_eq!(offered.footer(), word("새 마이너 패치 있음", false, false));
+        // It is a patch like the other in everything else the screen says of it.
+        let shown = offered.shown();
+        assert_eq!(shown.button, Button { kind: ButtonKind::Download, enabled: true, primary: true });
+        assert_eq!(shown.percent, Some(0.0));
+    }
+
+    /// A run that was left unfinished is not called by its kind: what waits is the run.
+    #[test]
+    fn a_minor_patch_that_was_left_off_says_that_a_patch_was_left_off() {
+        let left = Scene::ready(resumable(game(), None, Some(41.0)), Some(minor_patch_to("1.2.421 (4)", 4)));
+        assert_eq!(left.footer(), word("중단된 패치 있음", false, false));
     }
 
     #[test]
@@ -573,9 +635,9 @@ mod tests {
     fn the_installed_version_is_the_one_the_look_found_and_after_a_run_the_one_it_patched_to() {
         assert_eq!(Scene::ready(game(), None).shown().current.as_deref(), Some("1.2.421"));
         assert_eq!(Scene::done(None).shown().current.as_deref(), Some("1.2.422"));
-        // A run of a picked file names no version; the look's stands.
-        let file = Scene::with_run(Phase::Done, |run| run.label = None);
-        assert_eq!(file.shown().current.as_deref(), Some("1.2.421"));
+        // A run by an address the user gave names no version; the look's stands.
+        let given = Scene::with_run(Phase::Done, |run| run.label = None);
+        assert_eq!(given.shown().current.as_deref(), Some("1.2.421"));
         // While a run is at work or stopped it is still the old one.
         assert_eq!(Scene::with_run(Phase::Paused, |_| ()).shown().current.as_deref(), Some("1.2.421"));
         assert_eq!(Scene::ready(half_patched(game(), None, None), None).shown().current, None);
@@ -597,7 +659,10 @@ mod tests {
         assert_eq!((space.label, space.ok, space.detail.as_str()), ("여유 공간", Some(true), "160.0 GB"));
         // The patch file with its size, in whole megabytes.
         let file = &shown.rows[2];
-        assert_eq!((file.label, file.ok, file.detail.as_str()), ("패치 파일", Some(true), "1,229 MB"));
+        assert_eq!(
+            (file.label, file.ok, file.detail.as_str()),
+            ("패치 파일", Some(true), "00421to00422.patch · 1,229 MB")
+        );
     }
 
     #[test]
@@ -644,6 +709,50 @@ mod tests {
         let shown = Scene::ready(status, Some(errored("이전 패치 복구 대기"))).shown();
         assert_eq!(kinds(&shown), [RowKind::Folder, RowKind::Space, RowKind::Recovery, RowKind::PatchFile]);
         assert_eq!((shown.status.as_str(), shown.status_bad), ("이전 패치 복구 대기", true));
+    }
+
+    /// The immediate way is chosen on a drive that does not take it. The page is told so
+    /// as a line of its own kind, which it shows on its line for the choice; the line for
+    /// the room is as it would be, and a press says what is in the way.
+    #[test]
+    fn a_way_of_patching_the_drive_does_not_take_is_a_line_of_its_own_kind() {
+        let sentence = "즉시 패치는 NTFS 드라이브에서만 사용할 수 있습니다.";
+        let mut status = game();
+        status.checks.push(Check::failed(CheckKind::Way, "즉시 패치 불가", sentence));
+        assert!(status.blocked());
+        let shown = Scene::ready(status, Some(patch_to("1.2.422"))).shown();
+        assert_eq!(kinds(&shown), [RowKind::Folder, RowKind::Space, RowKind::Way, RowKind::PatchFile]);
+        let (room, way) = (&shown.rows[1], &shown.rows[2]);
+        assert_eq!(room.ok, Some(true));
+        assert_eq!(
+            (way.label, way.ok, way.detail.as_str(), way.message.as_str()),
+            ("패치 방식", Some(false), "즉시 패치 불가", sentence)
+        );
+        assert_eq!(serde_json::to_value(way.kind).unwrap(), serde_json::json!("way"));
+        assert_eq!((shown.status.as_str(), shown.status_bad), ("패치 불가", true));
+        // The button is there to be pressed, and says what is in the way: not the main one.
+        assert!(shown.button.enabled && !shown.button.primary);
+    }
+
+    /// An apply was cut off and the folder is being put back, which can take minutes. The
+    /// footer says what is waited for, as something that is at work and not as bad news,
+    /// and no line of the screen speaks of it: whatever the server has last said.
+    #[test]
+    fn a_folder_that_is_being_put_back_is_waited_for_and_is_no_bad_news() {
+        let putting_back = || {
+            let mut status = game();
+            status.putting_back = true;
+            (status.version, status.resumable) = (None, false);
+            status
+        };
+        for answer in [None, Some(errored("이전 패치 복구 대기")), Some(patch_to("1.2.422"))] {
+            let shown = Scene::ready(putting_back(), answer).shown();
+            assert_eq!(kinds(&shown), [RowKind::Folder, RowKind::Space, RowKind::PatchFile]);
+            assert_eq!((shown.status.as_str(), shown.status_bad, shown.busy), ("이전 패치 복구 대기", false, true));
+            assert_eq!(shown.current, None);
+            // Whichever button it is, it is off until the folder is back.
+            assert!(!shown.button.enabled && !shown.button.primary);
+        }
     }
 
     #[test]
@@ -724,8 +833,7 @@ mod tests {
         // With a patch that was found before, or a run to go on with, that is offered instead.
         let stale = Availability { error: Some("서버 요청 실패".to_owned()), ..patch_to("1.2.422") };
         assert_eq!(Scene::ready(game(), Some(stale)).button(), (ButtonKind::Download, true, true));
-        let file = r"D:\patches\00421to00422.patch";
-        let own = Scene::ready(resumable(game(), Some(file), None), Some(errored("서버 요청 실패")));
+        let own = Scene::ready(resumable(game(), Some(GIVEN), None), Some(errored("서버 요청 실패")));
         assert_eq!(own.button(), (ButtonKind::Resume, true, true));
     }
 
@@ -809,10 +917,108 @@ mod tests {
         };
         let mut said = Scene::ready(half_patched(game(), None, Some(41.0)), Some(patch_to("1.2.421")));
         let quiet = said.shown();
-        said.run = Some(Run { failure: Some(failure), ..run_of(Some(r"D:\patches\wrong.patch"), None) });
+        said.run = Some(Run { failure: Some(failure), ..run_of(Some(GIVEN_WRONG), None) });
         assert_eq!(said.shown(), quiet);
         // The half-patched folder's own screen: the bar where the run was left, and going on.
         assert_eq!((quiet.status.as_str(), quiet.percent), ("중단된 패치 있음", Some(41.0)));
         assert_eq!(said.button(), (ButtonKind::Resume, true, true));
+    }
+
+    /// The page names the newest version on one line and says in the footer whether the
+    /// install is at it. The two are one statement: while there is no newest version to
+    /// name, the footer does not say that the install is up to date, whatever the answer
+    /// says. It waits, and the figure and the button wait with it.
+    #[test]
+    fn the_footer_does_not_call_the_install_up_to_date_while_the_page_has_no_newest_version_to_name() {
+        let unnamed = Scene { latest: None, ..Scene::ready(game(), Some(up_to_date("1.2.421"))) };
+        let shown = unnamed.shown();
+        assert_eq!((shown.latest.as_deref(), shown.percent), (None, Some(0.0)));
+        assert_eq!(unnamed.footer(), word("최신 버전 확인 중", false, true));
+        assert_eq!(unnamed.button(), (ButtonKind::Download, false, false));
+        // So it is with the game open, which is the one thing that may be in the way of a
+        // folder that is up to date.
+        let playing = Scene { latest: None, ..Scene::ready(game_open(game()), Some(up_to_date("1.2.421"))) };
+        assert_eq!(playing.footer().0, "최신 버전 확인 중");
+
+        // With the version named, both lines say it.
+        let named = Scene::ready(game(), Some(up_to_date("1.2.421")));
+        let shown = named.shown();
+        assert_eq!((shown.latest.as_deref(), shown.percent), (Some("1.2.421"), Some(100.0)));
+        assert_eq!(named.footer(), word("최신 버전", false, false));
+        assert_eq!(named.button(), (ButtonKind::Launch, true, true));
+
+        // A check that could not be made says why, with or without a version from before.
+        for latest in [None, Some("1.2.421".to_owned())] {
+            let failed = Scene { latest, ..Scene::ready(game(), Some(errored("서버 요청 실패"))) };
+            assert_eq!(failed.footer(), word("서버 요청 실패", true, false));
+        }
+        // While the server is asked again, the version it had before stays on the page.
+        let asking = Scene { latest: Some("1.2.421".to_owned()), ..Scene::ready(game(), None) };
+        assert_eq!(asking.shown().latest.as_deref(), Some("1.2.421"));
+        assert_eq!(asking.footer(), word("최신 버전 확인 중", false, true));
+    }
+
+    /// The 패치 파일 line says which file the patch is, by the name it has on the server,
+    /// and how large it is. The page is given the address to begin from when the user
+    /// states where the patch is themselves.
+    #[test]
+    fn the_patch_file_line_names_the_file_and_the_page_is_given_an_address_to_begin_from() {
+        let found = Scene::ready(game(), Some(patch_to("1.2.422"))).shown();
+        assert_eq!(found.rows.last().unwrap().detail, "00421to00422.patch · 1,229 MB");
+        assert_eq!(found.address, "https://maplestory.dn.nexoncdn.co.kr/Patch/00422/00421to00422.patch");
+
+        // A minor patch has the name Nexon gives it on the server, which is not the one its
+        // file is kept under on this PC.
+        let mut minor = minor_patch_to("1.2.421 (4)", 4);
+        let of_minor = "https://maplestory.dn.nexoncdn.co.kr/Patch/00421/Minor/03to04.patch";
+        if let Some(target) = &mut minor.target {
+            (target.url, target.file_name) = (of_minor.to_owned(), "00421-minor-03to04.patch".to_owned());
+        }
+        let shown = Scene::ready(game(), Some(minor)).shown();
+        assert_eq!(
+            (shown.rows.last().unwrap().detail.as_str(), shown.address.as_str()),
+            ("03to04.patch · 1,229 MB", of_minor)
+        );
+
+        // With no patch found, it is where the patch to the next version would be.
+        let next = "https://maplestory.dn.nexoncdn.co.kr/Patch/00422/00421to00422.patch";
+        let at_a_version = Status { next_address: Some(next.to_owned()), ..game() };
+        for answer in [None, Some(up_to_date("1.2.421")), Some(errored("서버 요청 실패"))] {
+            let shown = Scene::ready(at_a_version.clone(), answer).shown();
+            assert_eq!((shown.rows.last().unwrap().detail.as_str(), shown.address.as_str()), ("", next));
+        }
+        // A folder whose version is not known has nothing to begin from.
+        let unknown = Scene::ready(Status { version: None, ..game() }, Some(errored("현재 버전 확인 불가"))).shown();
+        assert_eq!(unknown.address, "");
+    }
+
+    /// An apply was cut off and its record cannot be read: the folder can neither be gone
+    /// on with nor put back. The screen says so on the line for the recovery and in the
+    /// footer, offers nothing to continue, and still lists what the run left, to be removed.
+    #[test]
+    fn a_folder_whose_record_of_an_apply_cannot_be_read_is_shown_as_that_with_nothing_to_go_on_with() {
+        let folder = journal_unreadable(game());
+        let scene = Scene::ready(folder.clone(), Some(errored("작업 기록 손상")));
+        let shown = scene.shown();
+        let lines = [RowKind::Folder, RowKind::Space, RowKind::Recovery, RowKind::Leftover, RowKind::PatchFile];
+        assert_eq!(kinds(&shown), lines);
+        let recovery = &shown.rows[2];
+        assert_eq!(
+            (recovery.label, recovery.ok, recovery.detail.as_str()),
+            ("패치 복구", Some(false), "작업 기록 손상")
+        );
+        assert_eq!(recovery.message, "이전 패치 작업 기록이 손상되었습니다.\n공식 런처로 게임을 복구해 주세요.");
+        assert_eq!((shown.rows[3].label, shown.rows[3].detail.as_str()), ("이전 패치 작업", "12.3 GB"));
+        assert_eq!((shown.current.as_deref(), shown.percent), (None, Some(0.0)));
+        assert_eq!(scene.footer(), word("작업 기록 손상", true, false));
+        // The button asks the server again, as after any check that had nothing to offer.
+        // It is never the one that goes on with a run.
+        assert_eq!(scene.button(), (ButtonKind::CheckAgain, true, false));
+        let asking = Scene::ready(folder.clone(), None);
+        assert_eq!(asking.button(), (ButtonKind::Download, false, false));
+        // Should a patch be known for the folder all the same, it is not the next thing to do.
+        let offered = Scene::ready(folder, Some(patch_to("1.2.422")));
+        assert_eq!(offered.footer(), word("패치 불가", true, false));
+        assert_eq!(offered.button(), (ButtonKind::Download, true, false));
     }
 }

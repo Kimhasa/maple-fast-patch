@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 
 use crate::desk::tell_app;
 use crate::state::Patcher;
-use crate::window::show_tray;
+use crate::window::settle_tray;
 
 /// What the user has set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -15,7 +15,7 @@ use crate::window::show_tray;
 pub(crate) struct Settings {
     /// Apply a patch as soon as one is found, without waiting for the button.
     pub(crate) auto_patch: bool,
-    /// Say so when the game's maintenance is over or has been extended.
+    /// Say so when the game's maintenance has begun, has been extended or is over.
     pub(crate) maintenance_alert: bool,
     /// Start the game by itself once a patch is done and the game can be played.
     pub(crate) auto_start: bool,
@@ -23,8 +23,9 @@ pub(crate) struct Settings {
     pub(crate) exit_after_start: bool,
     /// Closing the window only puts it away: the app stays at work, next to the clock.
     pub(crate) background: bool,
-    /// Replace game files as they are built when the drive has no room to build them all
-    /// first. With the room, a patch goes the usual way; the engine decides which it is.
+    /// The way of patching the user chose where a patch is started: with this, every run
+    /// replaces game files as it builds them, whatever room the drive has; without it,
+    /// every run builds them all first. The room a run needs is the room of that way.
     pub(crate) immediate: bool,
     /// What kind of drive the game is to be taken to be on. No switch sets this: it is a
     /// line in the settings file, for trying out by hand how a patch goes either way.
@@ -141,7 +142,12 @@ pub(crate) fn set_settings(app: AppHandle, patcher: State<Patcher>, settings: Se
     settings.save(&patcher.data).map_err(|_| "설정을 저장할 수 없습니다.".to_owned())?;
     let before = std::mem::replace(&mut *patcher.settings.lock().unwrap(), settings);
     if before.background != settings.background {
-        show_tray(&app, settings.background);
+        settle_tray(&app);
+    }
+    // What a run asks of the drive goes by the way that is chosen: every folder is looked
+    // at again at once, so that its line for the room says what holds now.
+    if before.immediate != settings.immediate {
+        patcher.sites.iter().for_each(|site| site.flow.lock().unwrap().look_soon());
     }
     // The page shows what is set, and the desks go by it: a patch that was waiting for the
     // user may be the app's to start from here on.

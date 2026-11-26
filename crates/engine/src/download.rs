@@ -9,6 +9,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::error::{Error, Result};
@@ -74,7 +75,60 @@ fn agent(https_only: bool, body_time: Option<Duration>) -> ureq::Agent {
 }
 
 fn transport(err: ureq::Error) -> Error {
-    Error::Download { status: None, detail: err.to_string() }
+    lost(err.to_string())
+}
+
+/// A request that failed without an answer from the server.
+fn lost(detail: impl Into<String>) -> Error {
+    Error::Download { status: None, detail: detail.into() }
+}
+
+/// How often a download that waits for the server looks whether the run was paused.
+const LOOK: Duration = Duration::from_millis(50);
+
+/// Does `work`, which waits for the server, on a thread of its own, and waits for it here,
+/// where a pause is seen within a moment.
+///
+/// Waiting for a server cannot be broken off: a request ends when the server answers or
+/// when one of its time limits runs out, and until then the thread that made it is held.
+/// After a pause that thread is left to end by itself, and what it brings is dropped.
+fn aside<T: Send + 'static>(stop: &AtomicBool, work: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    let (done, result) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("mfp-request".to_owned())
+        .spawn(move || drop(done.send(work())))
+        .map_err(|e| Error::io("start a thread for a request", e))?;
+    loop {
+        match result.recv_timeout(LOOK) {
+            Ok(value) => return Ok(value),
+            Err(mpsc::RecvTimeoutError::Timeout) if stop.load(Ordering::Relaxed) => return Err(Error::Stopped),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(lost("the request was given up")),
+        }
+    }
+}
+
+/// Reads the body of an answer on a thread of its own and hands on what arrives, piece by
+/// piece. An empty piece is the end of the body. See [`aside`] for why: a server that stops
+/// sending in the middle of a body holds whoever reads it.
+fn read_aside(mut body: impl Read + Send + 'static) -> Result<mpsc::Receiver<std::io::Result<Vec<u8>>>> {
+    let (arrived, arrivals) = mpsc::sync_channel(2);
+    let read = move || {
+        let mut buffer = vec![0u8; 1 << 18];
+        loop {
+            let piece = body.read(&mut buffer).map(|count| buffer[..count].to_vec());
+            let last = !matches!(&piece, Ok(bytes) if !bytes.is_empty());
+            // After a pause nobody waits for the rest.
+            if arrived.send(piece).is_err() || last {
+                break;
+            }
+        }
+    };
+    std::thread::Builder::new()
+        .name("mfp-body".to_owned())
+        .spawn(read)
+        .map_err(|e| Error::io("start a thread for a download", e))?;
+    Ok(arrivals)
 }
 
 fn header(response: &ureq::http::Response<ureq::Body>, name: &str) -> Option<String> {
@@ -99,6 +153,7 @@ fn body(response: ureq::http::Response<ureq::Body>, limit: u64) -> Result<Vec<u8
 /// several exchanges before the question is even asked. A session keeps the connection of
 /// one request for the next request to the same server: a run asks about its patch file and
 /// then fetches it, and the app asks about several patch files in a row.
+#[derive(Clone)]
 pub struct Session {
     agent: ureq::Agent,
 }
@@ -146,14 +201,16 @@ impl Session {
 
     /// [`Session::probe`], asked again with the same patience as a download when the line
     /// or the server fails. A patch run starts with this question; one lost answer should
-    /// not end the run.
+    /// not end the run. A pause ends the asking at once, also while a server that was
+    /// reached is taking its time to answer.
     pub fn probe_patiently(&self, url: &str, patience: Patience, stop: &AtomicBool) -> Result<Remote> {
         let mut failures = 0;
         loop {
             if stop.load(Ordering::Relaxed) {
                 return Err(Error::Stopped);
             }
-            match self.probe(url) {
+            let (session, address) = (self.clone(), url.to_owned());
+            match aside(stop, move || session.probe(&address))? {
                 Err(err @ Error::Download { status, .. }) if passing(status) => {
                     failures += 1;
                     if failures >= patience.attempts {
@@ -209,6 +266,7 @@ impl Session {
                 part: &part,
                 dest,
                 tag: tag.as_deref(),
+                silence: patience.silence,
                 in_one_go: Cell::new(false),
                 sink: RefCell::new(Sink::new()),
             };
@@ -278,6 +336,10 @@ const PIECE: u64 = 8 << 20;
 /// A piece that has not fully arrived within this time is cut short and the rest of it asked
 /// for again, so a connection that went silent cannot hang the download.
 const PIECE_TIME: Duration = Duration::from_secs(60);
+/// The longest a file that the server only sends whole may take to arrive. Nobody waits that
+/// long for a server that went silent, see [`Patience::silence`]; this is what ends the
+/// thread that is still listening to one.
+const WHOLE_FILE_TIME: Duration = Duration::from_secs(24 * 60 * 60);
 /// The longest wait between two attempts.
 const LONGEST_WAIT: Duration = Duration::from_secs(8);
 
@@ -288,12 +350,16 @@ pub struct Patience {
     pub attempts: u32,
     /// The wait before the second attempt. Each later wait is twice as long, up to 8 seconds.
     pub first_wait: Duration,
+    /// How long a server may send nothing in the middle of an answer before the request
+    /// counts as failed.
+    pub silence: Duration,
 }
 
 impl Default for Patience {
-    /// Rides out about half a minute without a connection.
+    /// Rides out about half a minute without a connection, and a minute of a server that
+    /// has stopped in the middle of an answer.
     fn default() -> Patience {
-        Patience { attempts: 8, first_wait: Duration::from_millis(500) }
+        Patience { attempts: 8, first_wait: Duration::from_millis(500), silence: PIECE_TIME }
     }
 }
 
@@ -415,6 +481,8 @@ struct Piece<'a> {
     part: &'a Path,
     dest: &'a Path,
     tag: Option<&'a str>,
+    /// See [`Patience::silence`].
+    silence: Duration,
     /// Set once the server turns out to ignore requests for a piece of the file.
     in_one_go: Cell<bool>,
     sink: RefCell<Sink>,
@@ -466,8 +534,8 @@ impl Piece<'_> {
         let end = (start + PIECE).min(remote.len) - 1;
         let mut request = self.session.get(self.url);
         if self.in_one_go.get() {
-            // The whole file takes as long as it takes.
-            request = request.config().timeout_recv_body(None).build();
+            // The whole file takes as long as it takes, for as long as bytes keep coming.
+            request = request.config().timeout_recv_body(Some(WHOLE_FILE_TIME)).build();
         } else {
             request = request.header("Range", format!("bytes={start}-{end}"));
             if let Some(etag) = &remote.etag {
@@ -475,7 +543,7 @@ impl Piece<'_> {
                 request = request.header("If-Range", etag);
             }
         }
-        let response = request.call().map_err(transport)?;
+        let response = aside(stop, move || request.call())?.map_err(transport)?;
         let status = response.status().as_u16();
         let unexpected = |detail: &str| Error::Download { status: Some(status), detail: detail.to_owned() };
 
@@ -515,28 +583,35 @@ impl Piece<'_> {
             }
         }
 
-        let mut body = response.into_body().into_reader();
-        let mut buffer = vec![0u8; 1 << 18];
+        let arrivals = read_aside(response.into_body().into_reader())?;
         let mut done = start;
+        let mut heard = Instant::now();
         on_progress(done, remote.len);
         let outcome = loop {
             if stop.load(Ordering::Relaxed) {
                 break Err(Error::Stopped);
             }
-            match body.read(&mut buffer) {
-                // The answer is read to its very end, not just for the bytes asked for: only
-                // a connection whose answer was read out is kept for the next piece.
-                Ok(0) => break Ok(()),
-                Ok(count) if done + count as u64 > expected => {
-                    break Err(unexpected("the server sent more than it announced"));
-                }
-                Ok(count) => {
-                    file.write_all(&buffer[..count]).map_err(|e| Error::file("write", part, e))?;
-                    done += count as u64;
-                    on_progress(done, remote.len);
-                }
-                Err(e) => break Err(Error::Download { status: None, detail: format!("connection lost: {e}") }),
+            let bytes = match arrivals.recv_timeout(LOOK) {
+                Ok(Ok(bytes)) => bytes,
+                Ok(Err(e)) => break Err(lost(format!("connection lost: {e}"))),
+                Err(mpsc::RecvTimeoutError::Timeout) if heard.elapsed() < self.silence => continue,
+                // The server keeps the connection and says nothing more. Waiting on is
+                // waiting for nothing; the next request starts from what did arrive.
+                Err(mpsc::RecvTimeoutError::Timeout) => break Err(lost("the server went silent")),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break Err(lost("connection lost")),
+            };
+            heard = Instant::now();
+            // The answer is read to its very end, not just for the bytes asked for: only a
+            // connection whose answer was read out is kept for the next piece.
+            if bytes.is_empty() {
+                break Ok(());
             }
+            if done + bytes.len() as u64 > expected {
+                break Err(unexpected("the server sent more than it announced"));
+            }
+            file.write_all(&bytes).map_err(|e| Error::file("write", part, e))?;
+            done += bytes.len() as u64;
+            on_progress(done, remote.len);
         };
         sink.sync_if_due(part)?;
         outcome?;
@@ -550,6 +625,15 @@ impl Piece<'_> {
     }
 }
 
+/// What a small read brought: its text, and what the server said the time was as it
+/// answered, which is its `Date` header as it was sent. Whoever goes by the clock can hold
+/// its own against that.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dated {
+    pub text: String,
+    pub date: Option<String>,
+}
+
 /// Fetches a small page as text, at most `limit` bytes of it.
 pub fn page(url: &str, limit: u64) -> Result<String> {
     let response = agent(secure(url), Some(Duration::from_secs(30))).get(url).call().map_err(transport)?;
@@ -558,6 +642,28 @@ pub fn page(url: &str, limit: u64) -> Result<String> {
         return Err(Error::Download { status: Some(status), detail: "unexpected answer".into() });
     }
     Ok(String::from_utf8_lossy(&body(response, limit)?).into_owned())
+}
+
+/// What a site answered a small read with, whatever the answer was: its status, the path
+/// of the address it came from once redirects were followed (without what follows a `?`),
+/// at most `limit` bytes of its text, and the time the server stated. For whoever has to
+/// tell an answer that is not the page it asked for from no answer at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Answer {
+    pub status: u16,
+    pub path: String,
+    pub text: String,
+    pub date: Option<String>,
+}
+
+/// Reads a small page whatever status it is answered with. Fails only where no answer came.
+pub fn page_answer(url: &str, limit: u64) -> Result<Answer> {
+    use ureq::ResponseExt;
+    let request = agent(secure(url), Some(Duration::from_secs(30))).get(url).config().http_status_as_error(false);
+    let response = request.build().call().map_err(transport)?;
+    let (status, path) = (response.status().as_u16(), response.get_uri().path().to_owned());
+    let date = response.headers().get("date").and_then(|date| date.to_str().ok()).map(str::to_owned);
+    Ok(Answer { status, path, text: String::from_utf8_lossy(&body(response, limit)?).into_owned(), date })
 }
 
 /// An agent that leaves TLS to Windows itself. Some of Nexon's older servers only offer
@@ -572,6 +678,11 @@ fn system_agent(url: &str) -> ureq::Agent {
 
 /// Asks a SOAP service one question and returns its answer as text, at most `limit` bytes.
 pub fn soap(url: &str, action: &str, envelope: &str, limit: u64) -> Result<String> {
+    soap_dated(url, action, envelope, limit).map(|dated| dated.text)
+}
+
+/// [`soap`], with the time the server said it was.
+pub fn soap_dated(url: &str, action: &str, envelope: &str, limit: u64) -> Result<Dated> {
     let response = system_agent(url)
         .post(url)
         .header("Content-Type", "text/xml; charset=utf-8")
@@ -582,7 +693,8 @@ pub fn soap(url: &str, action: &str, envelope: &str, limit: u64) -> Result<Strin
     if status != 200 {
         return Err(Error::Download { status: Some(status), detail: "unexpected answer".into() });
     }
-    Ok(String::from_utf8_lossy(&body(response, limit)?).into_owned())
+    let date = response.headers().get("date").and_then(|date| date.to_str().ok()).map(str::to_owned);
+    Ok(Dated { text: String::from_utf8_lossy(&body(response, limit)?).into_owned(), date })
 }
 
 /// Downloads only the first `len` bytes of a file.

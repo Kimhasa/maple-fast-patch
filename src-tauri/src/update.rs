@@ -1,5 +1,6 @@
 //! Word of a newer version of this app.
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use mfp_engine::download;
@@ -10,7 +11,7 @@ use tauri_plugin_opener::OpenerExt;
 use crate::desk::tell_app;
 use crate::log::log_line;
 use crate::maintenance::own_delay;
-use crate::state::Patcher;
+use crate::state::{Patcher, Site};
 
 /// Word of a newer version of this app than the one running.
 #[derive(Clone, PartialEq, Eq, Serialize)]
@@ -82,12 +83,25 @@ fn read_notice(page: &str, running: [u64; 3]) -> Result<Option<Update>, String> 
     Ok(newest.filter(|(version, _)| running < *version).map(|(_, latest)| Update { latest, required, message }))
 }
 
-/// Looks once in a while whether there is a newer version of this app: soon after the app
-/// is started, and then once a day for as long as it stays open. A look that failed is
-/// made again half an hour later.
+/// How long after the app is started its home is first asked, at the latest, and how long
+/// after a maintenance has begun: every copy of the app waits an amount of its own up to
+/// this, so that they do not all ask in the same second.
+const FIRST_WITHIN: u64 = 3;
+const AFTER_A_MAINTENANCE_BEGINS_WITHIN: u64 = 10;
+
+/// Looks whether there is a newer version of this app: as the app is started, when a
+/// maintenance begins, and otherwise once a day for as long as the app stays open. A look
+/// that failed is made again half an hour later.
 ///
 /// That is all it does. Nothing is downloaded or installed; the screen gets a line that
 /// says so, and the user decides.
+///
+/// A version that is too old to patch with is not to patch by itself either, and only this
+/// look tells it that it is one. So the app does nothing by itself before the first look
+/// was made (see [`decide`](crate::flow::decide)), which is why that look comes at once.
+/// It waits for the look, not for an answer: an app that cannot reach its home works like
+/// one whose home has nothing to say. A patch comes out during a maintenance, so that is
+/// when the word is read anew, whatever the day's look found.
 pub(crate) fn watch_updates(app: AppHandle) {
     const DAY: u64 = 24 * 60 * 60;
     const AGAIN: u64 = 30 * 60;
@@ -96,13 +110,23 @@ pub(crate) fn watch_updates(app: AppHandle) {
         let running = &app.package_info().version;
         let running = [running.major, running.minor, running.patch];
         let mut unread = false;
-        // Not all copies of the app ask in the same second after they are started.
-        let mut wait = own_delay(60);
+        let mut wait = own_delay(FIRST_WITHIN);
         loop {
-            std::thread::sleep(Duration::from_secs(wait));
+            // Waited for a second at a time, so that word of a maintenance is not slept
+            // through.
+            let mut waited = 0;
+            while waited < wait {
+                std::thread::sleep(Duration::from_secs(1));
+                waited += 1;
+                if patcher.update_due.swap(false, Ordering::SeqCst) {
+                    wait = wait.min(waited + own_delay(AFTER_A_MAINTENANCE_BEGINS_WITHIN));
+                }
+            }
+            let first = !patcher.update_asked.load(Ordering::SeqCst);
             // Not during a run, which has the line and the drive to itself. It is looked at
-            // again in a minute.
-            if patcher.running().is_some() {
+            // again in a minute. The first look waits for nothing: a run that is at work
+            // by then was begun by the user, and what follows it is not.
+            if patcher.running().is_some() && !first {
                 wait = 60;
                 continue;
             }
@@ -124,6 +148,12 @@ pub(crate) fn watch_updates(app: AppHandle) {
                     log_line(&format!("could not read whether there is a newer version: {why}"));
                 }
                 Err(_) => {}
+            }
+            // The app has asked: from here on it does by itself what the user wants done.
+            // Said after what was read is in place, so that nothing begins in between by
+            // an answer that is not there yet.
+            if !patcher.update_asked.swap(true, Ordering::SeqCst) {
+                patcher.sites.iter().for_each(Site::wake_desk);
             }
         }
     });

@@ -4,10 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use mfp_engine::{Outcome, Stage, preflight};
-use mfp_kms::Client;
 use tauri::{AppHandle, State};
 
-use crate::offer::versions_in_name;
 use crate::records::Left;
 use crate::state::Patcher;
 #[cfg(windows)]
@@ -92,13 +90,6 @@ pub(crate) const STEPS: [(Stage, &str); 6] = [
     (Stage::Rebuild, "새 게임 파일 생성"),
     (Stage::Apply, "게임 파일 반영"),
 ];
-
-/// What a patch file the user picked for `client` is called in the measurement: the version
-/// it leads to, when its name is one of Nexon's (`00421to00422.patch`). Any other name is
-/// the user's own and stays out of it.
-pub(crate) fn file_label(client: &Client, file: &Path) -> String {
-    versions_in_name(file).map_or_else(|| "선택한 파일".to_owned(), |(_, to)| client.version_label(to))
-}
 
 /// Size of the drive `dir` is on, in bytes. What is free there the engine tells; how big the
 /// drive is, it has no call for.
@@ -306,14 +297,5 @@ mod tests {
     fn a_patch_run_in_one_go_notes_only_the_way_it_was_applied() {
         assert_eq!(notes(&Measure::default(), false), None);
         assert_eq!(notes(&Measure::default(), true).as_deref(), Some("즉시 패치"));
-    }
-
-    #[test]
-    fn a_picked_file_is_called_by_the_version_it_leads_to_only_under_a_name_of_nexons() {
-        let picked = Path::new(r"D:\patches\00421to00422.patch");
-        assert_eq!(file_label(&mfp_kms::LIVE, picked), "1.2.422");
-        assert_eq!(file_label(&mfp_kms::TEST, Path::new("01207to01208.patch")), "1.2.208");
-        // Any other name is the user's own, and stays out of a text that is passed on.
-        assert_eq!(file_label(&mfp_kms::LIVE, Path::new(r"D:\patches\my patch.patch")), "선택한 파일");
     }
 }

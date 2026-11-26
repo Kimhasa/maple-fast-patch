@@ -6,8 +6,8 @@
 //!
 //! A run never changes the install folder until every new file has been built and verified
 //! in the work folder, and an apply that fails or is interrupted is undone. The one
-//! exception is asked for by the player and taken only when the drive has no room for that:
-//! see [`immediate`].
+//! exception is the other way of patching, which the player chooses before a patch is
+//! started: see [`immediate`].
 
 pub mod apply;
 mod busy;
@@ -19,6 +19,7 @@ pub mod error;
 pub mod immediate;
 pub mod plan;
 pub mod preflight;
+mod restore;
 pub mod run;
 pub mod stage;
 pub mod storage;

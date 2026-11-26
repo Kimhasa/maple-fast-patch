@@ -24,7 +24,10 @@
 //!
 //! - `MFP_LIVE_PATCH_FILES`, `MFP_TEST_PATCH_FILES`: where the client's patch files are
 //!   published, in place of Nexon's patch server: what their addresses begin with, before
-//!   the folder of a version (`http://127.0.0.1:18421/Patch`).
+//!   the folder of a version (`http://127.0.0.1:18421/Patch`). An address the user gives
+//!   on the screen (주소 입력) is taken from that server as from Nexon's: under what the
+//!   variable names it is the client's own, and anywhere else on the server it is asked
+//!   about first.
 //! - `MFP_LIVE_INSPECTION`: the address of the inspection service. The service does not
 //!   list the test world, so there is no such variable for it.
 //! - `MFP_LIVE_BOARD`, `MFP_TEST_BOARD`: the address of the board with the client's
@@ -61,21 +64,21 @@
 //!
 //! ```text
 //! cargo build -p mfp-tools
-//! fake_nexon make C:\MfpWorld\live --size 64
-//! fake_nexon serve C:\MfpWorld\live
+//! fake_nexon make C:\MapleFastPatchTest\World\live --size 64
+//! fake_nexon serve C:\MapleFastPatchTest\World\live
 //! ```
 //!
 //! In a second one, the app:
 //!
 //! ```text
-//! set MFP_DATA_DIR=C:\MfpWorld\live-data
+//! set MFP_DATA_DIR=C:\MapleFastPatchTest\World\live-data
 //! set MFP_LIVE_PATCH_FILES=http://127.0.0.1:18421/Patch
 //! set MFP_LIVE_INSPECTION=http://127.0.0.1:18421/inspection
 //! set MFP_LIVE_BOARD=http://127.0.0.1:18421/board
 //! set MFP_LIVE_VERSION=900
-//! set MFP_FAKE_LAUNCHED=C:\MfpWorld\launched.txt
-//! mkdir C:\MfpWorld\live-data
-//! echo C:\MfpWorld\live\install> C:\MfpWorld\live-data\install-dir
+//! set MFP_FAKE_LAUNCHED=C:\MapleFastPatchTest\World\launched.txt
+//! mkdir C:\MapleFastPatchTest\World\live-data
+//! echo C:\MapleFastPatchTest\World\live\install> C:\MapleFastPatchTest\World\live-data\install-dir
 //! yarn tauri dev
 //! ```
 //!
@@ -83,10 +86,10 @@
 //! console, while the app is open:
 //!
 //! ```text
-//! fake_nexon publish C:\MfpWorld\live all
-//! fake_nexon maintenance C:\MfpWorld\live begin
-//! fake_nexon maintenance C:\MfpWorld\live end
-//! fake_nexon state C:\MfpWorld\live
+//! fake_nexon publish C:\MapleFastPatchTest\World\live all
+//! fake_nexon maintenance C:\MapleFastPatchTest\World\live begin
+//! fake_nexon maintenance C:\MapleFastPatchTest\World\live end
+//! fake_nexon state C:\MapleFastPatchTest\World\live
 //! ```
 //!
 //! How soon the app notices goes by its own pace, which the made-up server's console shows
@@ -103,12 +106,12 @@
 //! are read the same way. The app has a page for it beside the live game's:
 //!
 //! ```text
-//! fake_nexon make C:\MfpWorld\test --server test --from 1207 --versions 1 --size 64
-//! fake_nexon serve C:\MfpWorld\test --port 18422
+//! fake_nexon make C:\MapleFastPatchTest\World\test --server test --from 1207 --versions 1 --size 64
+//! fake_nexon serve C:\MapleFastPatchTest\World\test --port 18422
 //! set MFP_TEST_PATCH_FILES=http://127.0.0.1:18422/PatchT
 //! set MFP_TEST_BOARD=http://127.0.0.1:18422/board-test
-//! mkdir C:\MfpWorld\live-data\test
-//! echo C:\MfpWorld\test\install> C:\MfpWorld\live-data\test\install-dir
+//! mkdir C:\MapleFastPatchTest\World\live-data\test
+//! echo C:\MapleFastPatchTest\World\test\install> C:\MapleFastPatchTest\World\live-data\test\install-dir
 //! ```
 //!
 //! A client that is not installed costs nothing: with no folder found and none picked,
@@ -177,6 +180,12 @@ pub(crate) struct StandIns {
     board: Option<String>,
     version: Option<u32>,
     refuse_real: bool,
+    /// The folder that stands in for the one the Nexon installer registered, and the version
+    /// the registry gives for it. Only a test has one: a made-up install is otherwise a
+    /// folder the registry knows nothing of, and what holds for the registered install
+    /// could not be tried on one.
+    #[cfg(test)]
+    registered: Option<(PathBuf, u32)>,
 }
 
 impl StandIns {
@@ -203,6 +212,8 @@ impl StandIns {
                 board: address("BOARD"),
                 version: of_client("VERSION").and_then(|number| number.parse().ok()),
                 refuse_real: set("MFP_ALLOW_REAL").as_deref() != Some("1"),
+                #[cfg(test)]
+                registered: None,
             }
         }
         #[cfg(not(debug_assertions))]
@@ -215,7 +226,15 @@ impl StandIns {
     /// What stands in and what is turned down, for a line in the log. `None` when nothing
     /// is, as in every release build.
     pub(crate) fn told(&self) -> Option<String> {
-        let StandIns { patch_files, inspection, board, version, refuse_real } = self;
+        let StandIns {
+            patch_files,
+            inspection,
+            board,
+            version,
+            refuse_real,
+            #[cfg(test)]
+                registered: _,
+        } = self;
         let told: Vec<String> = [
             patch_files.as_ref().map(|from| format!("patch files from {from}")),
             inspection.as_ref().map(|at| format!("inspection service at {at}")),
@@ -253,6 +272,19 @@ impl StandIns {
         self.version
     }
 
+    /// The folder that stands in for the registered install, and the version the registry
+    /// gives for it. No build that is given out or tried by hand has one.
+    pub(crate) fn registered(&self) -> Option<(&Path, u32)> {
+        #[cfg(test)]
+        {
+            self.registered.as_ref().map(|(dir, version)| (dir.as_path(), *version))
+        }
+        #[cfg(not(test))]
+        {
+            None
+        }
+    }
+
     /// Whether `dir` is turned down as an install folder: it is where a real game lives,
     /// and this build leaves those alone. That is a folder under `Nexon`, by its path as
     /// given or by where that leads, and the folder the Nexon installer registered wherever
@@ -268,6 +300,13 @@ impl StandIns {
         StandIns { version: Some(version), ..StandIns::default() }
     }
 
+    /// Stand-ins with `dir` as the folder the Nexon installer registered and `version` as
+    /// what the registry gives for it, for tests of what holds for the registered install.
+    #[cfg(test)]
+    pub(crate) fn registered_at(dir: &Path, version: u32) -> StandIns {
+        StandIns { registered: Some((dir.to_path_buf(), version)), ..StandIns::default() }
+    }
+
     /// The live game's stand-ins in a session against a made-up world, for tests of what
     /// asks them. They are put together here, so that such a test is the same in any build.
     #[cfg(test)]
@@ -278,6 +317,7 @@ impl StandIns {
             board: Some("http://127.0.0.1:18421/board".to_owned()),
             version: Some(900),
             refuse_real: true,
+            registered: None,
         }
     }
 }
@@ -342,6 +382,7 @@ mod tests {
                 board: Some("http://127.0.0.1:18421/board".to_owned()),
                 version: Some(900),
                 refuse_real: false,
+                registered: None,
             }
         );
         let test = StandIns::read(Server::Test, &among(SESSION));
@@ -353,6 +394,7 @@ mod tests {
                 board: Some("http://127.0.0.1:18422/board-test".to_owned()),
                 version: Some(1900),
                 refuse_real: false,
+                registered: None,
             }
         );
     }
@@ -446,10 +488,13 @@ mod tests {
     #[test]
     fn a_folder_of_the_real_game_is_told_by_the_nexon_in_its_path() {
         assert!(under_nexon(Path::new(r"C:\Nexon\Maple")) && under_nexon(Path::new(r"D:\games\NEXON\MapleT\Data")));
-        assert!(!under_nexon(Path::new(r"C:\MfpWorld\live\install")) && !under_nexon(Path::new(r"C:\NexonX\Maple")));
+        assert!(
+            !under_nexon(Path::new(r"C:\MapleFastPatchTest\World\live\install"))
+                && !under_nexon(Path::new(r"C:\NexonX\Maple"))
+        );
         let refusing = StandIns { refuse_real: true, ..StandIns::default() };
         assert!(refusing.refuses(Path::new(r"C:\Nexon\Maple"), || false));
-        assert!(!refusing.refuses(Path::new(r"C:\MfpWorld\live\install"), || false));
+        assert!(!refusing.refuses(Path::new(r"C:\MapleFastPatchTest\World\live\install"), || false));
         // The folder the Nexon installer registered is the real game wherever it is.
         assert!(refusing.refuses(Path::new(r"D:\Games\Maple"), || true));
         // Nor is the registry asked about a folder that is turned down already, or by a

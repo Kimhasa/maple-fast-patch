@@ -75,12 +75,18 @@ pub(crate) struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Run {
-    /// The patch file the user picked for it; `None` for the patch from the server.
+    /// The address the user gave for its patch; `None` for the patch a check found.
     pub(crate) source: Option<String>,
     /// The version a patch from the server leads to.
     pub(crate) label: Option<String>,
     /// The stop was asked for by closing the window; the app goes once the run has stopped.
     pub(crate) leaving: bool,
+    /// The window was closed on the run, and the user is being asked whether it is to go on
+    /// with the app next to the clock. Until they answer, or the run is asked to stop.
+    pub(crate) asking: bool,
+    /// When they were asked; see [`SAME_PRESS`].
+    #[serde(skip)]
+    pub(crate) asked_at: Option<Instant>,
     /// How far the bar has come, 0 to 100. It never goes back within a patch.
     pub(crate) percent: f64,
     /// The step the run is at; `None` before it has said.
@@ -89,7 +95,7 @@ pub(crate) struct Run {
     pub(crate) done: u64,
     pub(crate) total: u64,
     pub(crate) worked: u64,
-    /// What the run is working on, as in `생성중: Map001.wz`.
+    /// What the run is working on, as in `생성 중: Map001.wz`.
     pub(crate) activity: String,
     pub(crate) failure: Option<Failure>,
     /// What the step is called while it is at work.
@@ -130,7 +136,7 @@ pub(crate) struct Progress {
     /// Bytes of `done` this run worked for itself. The rest was found done by an earlier run,
     /// and says nothing about how fast the step is going.
     pub(crate) worked: u64,
-    /// What is being worked on, the way the game's own patcher shows it: `생성중: Map001.wz`.
+    /// What is being worked on, the way the game's own patcher shows it: `생성 중: Map001.wz`.
     /// Empty for a step that has named no file yet.
     pub(crate) activity: String,
 }
@@ -177,8 +183,11 @@ pub(crate) enum RefusalKind {
     Outdated,
     /// There is no install folder, or no patch for it.
     Nothing,
-    /// The file that was picked is no patch file.
-    NotPatch,
+    /// The address the user gave is not one a patch is fetched from, or no patch is there.
+    Address,
+    /// The address the user gave is on a server of Nexon's and not among the client's own
+    /// patch files, and the user has not said yes to it. The one message is the question.
+    Ask,
 }
 
 impl Refusal {
@@ -191,10 +200,11 @@ impl Refusal {
     }
 }
 
-/// The patch a run is of: a patch file on this PC, or the one the server has.
+/// The patch a run is of: the one at an address the user gave, or the one a check found on
+/// the server.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Patch {
-    File(String),
+    Given(String),
     Server(Target),
 }
 
@@ -209,18 +219,18 @@ pub(crate) struct Pick {
 }
 
 impl Pick {
-    /// The patch file the user picked, when the run is of one.
-    pub(crate) fn file(&self) -> Option<&str> {
+    /// The address the user gave, when the run is of the patch at one.
+    pub(crate) fn address(&self) -> Option<&str> {
         match &self.patch {
-            Patch::File(file) => Some(file),
+            Patch::Given(address) => Some(address),
             Patch::Server(_) => None,
         }
     }
 
-    /// The patch from the server, when the run is of that.
+    /// The patch a check found, when the run is of that.
     pub(crate) fn target(&self) -> Option<&Target> {
         match &self.patch {
-            Patch::File(_) => None,
+            Patch::Given(_) => None,
             Patch::Server(target) => Some(target),
         }
     }
@@ -230,10 +240,8 @@ impl Pick {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Decision {
     Nothing,
-    /// Start the patch that is waiting: `file` when it is one the user had picked.
-    StartPatch {
-        file: Option<String>,
-    },
+    /// Start the patch from the server that is waiting.
+    StartPatch,
     StartGame,
     /// The game was to be started after a patch, and is not: another patch is waiting, or
     /// that could not be ruled out.
@@ -252,6 +260,9 @@ pub(crate) struct World {
     pub(crate) run_at_work: bool,
     /// Whether the game can be played, as the lamp says; `None` while that is not known.
     pub(crate) open: Option<bool>,
+    /// The app's home was asked whether this version may still patch, once at least since
+    /// the app was started, whether or not it answered. Until then `outdated` says nothing.
+    pub(crate) update_asked: bool,
     pub(crate) now: Instant,
 }
 
@@ -281,8 +292,8 @@ pub(crate) struct Flow {
     pub(crate) rev: u64,
     pub(crate) phase: Phase,
     pub(crate) run: Option<Run>,
-    /// The patch file the user picked for the run that is on screen or was last left
-    /// unfinished. A run that is taken up again from the ready screen is of this file.
+    /// The address the user gave for the run that is on screen or was last left
+    /// unfinished. A run that is taken up again from the ready screen is of the patch there.
     source: Option<String>,
     left: Option<Left>,
     /// The patches that are the user's to start for the rest of the session: a run of each
@@ -351,6 +362,7 @@ impl Flow {
         Facts {
             status: self.status.as_ref(),
             answer: self.answer.as_ref(),
+            latest: self.latest.as_deref(),
             phase: self.phase,
             run: self.run.as_ref(),
             source: self.source.as_deref(),
@@ -361,6 +373,7 @@ impl Flow {
             outdated: world.outdated,
             run_at_work: world.run_at_work,
             open: world.open,
+            update_asked: world.update_asked,
             quiet: self.quiet(world.now),
             launching: self.launched_at.is_some_and(|at| world.now.saturating_duration_since(at) < LAUNCH_REST),
         }
@@ -501,6 +514,13 @@ impl Flow {
         self.next_check = now;
     }
 
+    /// Something the look goes by has changed that is not in the folder: the way of
+    /// patching the user chose, by which the room a run needs is judged. The folder is
+    /// looked at again at once, so that its lines say so.
+    pub(crate) fn look_soon(&mut self) {
+        self.look_now = true;
+    }
+
     /// What a run left in the folder was thrown away: the folder is looked at and the
     /// server asked at once. `half_patched` says that the run that was to be finished is
     /// given up with it, so that the patch that was offered for it no longer holds.
@@ -517,7 +537,7 @@ impl Flow {
     /// A game that was to be started after the patch before waits for this one instead.
     pub(crate) fn begin(&mut self, pick: &Pick, now: Instant) {
         self.phase = Phase::Starting;
-        self.source = pick.file().map(str::to_owned);
+        self.source = pick.address().map(str::to_owned);
         self.left = None;
         self.game_due = false;
         self.heard_at = Some(now);
@@ -525,6 +545,8 @@ impl Flow {
             source: self.source.clone(),
             label: pick.target().map(|target| target.label.clone()),
             leaving: false,
+            asking: false,
+            asked_at: None,
             percent: pick.percent,
             step: None,
             done: 0,
@@ -567,8 +589,44 @@ impl Flow {
     pub(crate) fn stop(&mut self, leaving: bool) -> bool {
         let Some(run) = self.run.as_mut().filter(|_| self.phase.at_work()) else { return false };
         run.leaving |= leaving;
+        // Whether it is to go on is no longer a question.
+        (run.asking, run.asked_at) = (false, None);
         self.phase = Phase::Stopping;
         true
+    }
+
+    /// How the run stands at `now` for a window that is asked to close; see [`on_close`].
+    fn at_close(&self, now: Instant) -> AtClose {
+        match (&self.run, self.phase) {
+            (Some(_), Phase::Stopping) => AtClose::Stopping,
+            (Some(run), Phase::Starting | Phase::Running) => match run.asked_at.filter(|_| run.asking) {
+                Some(asked_at) => AtClose::Asked(now.saturating_duration_since(asked_at)),
+                None => AtClose::AtWork,
+            },
+            _ => AtClose::Idle,
+        }
+    }
+
+    /// The window was asked to close at `now`. Says what that does, with `stays` as in
+    /// [`on_close`], and takes in the question it opens: the page asks it for as long as
+    /// the run says so. The question counts from when it was first asked.
+    pub(crate) fn close(&mut self, stays: bool, now: Instant) -> OnClose {
+        let does = on_close(stays, self.at_close(now));
+        if let (OnClose::Ask, Some(run)) = (does, self.run.as_mut())
+            && !run.asking
+        {
+            (run.asking, run.asked_at) = (true, Some(now));
+        }
+        does
+    }
+
+    /// The question that closing the window opened was answered or put aside. Says whether
+    /// it was still open: a run that has ended, or was asked to stop, is not asked about.
+    pub(crate) fn answered(&mut self) -> bool {
+        self.run.as_mut().is_some_and(|run| {
+            run.asked_at = None;
+            std::mem::take(&mut run.asking)
+        })
     }
 
     /// Takes in how the run on the screen ended.
@@ -588,7 +646,7 @@ impl Flow {
             self.phase = Phase::Ready;
             return;
         };
-        run.leaving = false;
+        (run.leaving, run.asking, run.asked_at) = (false, false, None);
         if let RunEnd::Done { seconds, files } = end {
             (run.percent, run.took, run.files, run.failure) = (100.0, seconds, files, None);
             (self.phase, self.run, self.source) = (Phase::Done, Some(run), None);
@@ -619,7 +677,7 @@ impl Flow {
         // A folder that a run left partly new takes the rest of that one patch only, and
         // the look made before this run names the file of it.
         let foreign =
-            self.status.as_ref().is_some_and(|status| status.half_patched && run.source != status.resume_file);
+            self.status.as_ref().is_some_and(|status| status.half_patched && run.source != status.resume_address);
         let never = run.step.is_none() && run.activity.is_empty();
         if never || (foreign && !stopped) {
             self.phase = Phase::Ready;
@@ -671,9 +729,12 @@ pub(crate) struct Facts<'a> {
     pub(crate) status: Option<&'a Status>,
     /// What the last check found, while it holds.
     pub(crate) answer: Option<&'a Availability>,
+    /// The newest version the server was last seen to have for the folder, which is what
+    /// the page shows as the newest.
+    pub(crate) latest: Option<&'a str>,
     pub(crate) phase: Phase,
     pub(crate) run: Option<&'a Run>,
-    /// The patch file the user picked for the run that is on screen or was last left
+    /// The address the user gave for the run that is on screen or was last left
     /// unfinished.
     pub(crate) source: Option<&'a str>,
     pub(crate) hands_off: &'a BTreeSet<String>,
@@ -683,6 +744,7 @@ pub(crate) struct Facts<'a> {
     pub(crate) outdated: bool,
     pub(crate) run_at_work: bool,
     pub(crate) open: Option<bool>,
+    pub(crate) update_asked: bool,
     /// The run at work has said nothing for a while.
     pub(crate) quiet: bool,
     /// The game was started a moment ago; the button rests.
@@ -705,18 +767,25 @@ impl<'a> Facts<'a> {
         self.status.is_some_and(Status::blocked)
     }
 
-    /// The patch file of a run that was left unfinished and can be continued, when it was
-    /// one the user had picked. A folder that a run left partly new takes the rest of that
-    /// one patch only, so there the file is the one on record, whatever else was tried in
-    /// the meantime.
-    pub(crate) fn resume_file(&self) -> Option<&'a str> {
+    /// The address of the patch of a run that was left unfinished and can be continued,
+    /// when it was one the user had given. A folder that a run left partly new takes the
+    /// rest of that one patch only, so there the address is the one on record, whatever
+    /// else was tried in the meantime.
+    pub(crate) fn resume_address(&self) -> Option<&'a str> {
         let status = self.status.filter(|status| status.resumable)?;
-        let on_record = status.resume_file.as_deref();
+        let on_record = status.resume_address.as_deref();
         if status.half_patched { on_record } else { self.source.or(on_record) }
     }
 
+    /// Whether a run of the patch at `address` is there to be gone on with: the run that
+    /// stopped on the screen is of it, or the one that was left unfinished.
+    pub(crate) fn continues(&self, address: &str) -> bool {
+        let halted = self.run.filter(|_| self.phase.halted()).and_then(|run| run.source.as_deref());
+        halted == Some(address) || self.resume_address() == Some(address)
+    }
+
     pub(crate) fn can_start(&self) -> bool {
-        self.status.is_some() && (self.target().is_some() || self.resume_file().is_some())
+        self.status.is_some() && (self.target().is_some() || self.resume_address().is_some())
     }
 
     /// No install folder was found and none was picked: the game is not installed.
@@ -738,14 +807,22 @@ impl<'a> Facts<'a> {
     /// The server has not answered for this folder yet. An answer names the newest version
     /// or says why it could not; one that does neither came from a moment when the folder
     /// was being changed, and counts as none.
+    ///
+    /// Nor does an answer count for more than the page has to show. The page names the
+    /// newest version on one line and says on another whether the install is at it, and
+    /// the two are one statement: while there is no newest version to name, nothing is
+    /// said of the install being at it either, and the server counts as still to answer.
     pub(crate) fn unanswered(&self) -> bool {
-        self.answer.is_none_or(|answer| self.game_folder() && answer.latest.is_none() && answer.error.is_none())
+        self.answer.is_none_or(|answer| {
+            let named = answer.latest.is_some() && self.latest.is_some();
+            self.game_folder() && !named && answer.error.is_none()
+        })
     }
 
     /// The server was asked and has nothing newer: the button starts the game instead.
     pub(crate) fn up_to_date(&self) -> bool {
         let no_error = self.answer.is_some_and(|answer| answer.error.is_none());
-        let nothing_to_apply = self.target().is_none() && self.resume_file().is_none();
+        let nothing_to_apply = self.target().is_none() && self.resume_address().is_none();
         self.status.is_some() && !self.unanswered() && no_error && nothing_to_apply && self.clear()
     }
 
@@ -757,22 +834,29 @@ impl<'a> Facts<'a> {
     /// The check could not be made; the button asks again instead of starting anything.
     pub(crate) fn ask_again(&self) -> bool {
         let failed = self.answer.is_some_and(|answer| answer.error.is_some());
-        failed && self.target().is_none() && self.resume_file().is_none()
+        failed && self.target().is_none() && self.resume_address().is_none()
     }
 
-    /// A run of a file the user picked waits to be continued. The server has no say in that.
+    /// A run of a patch the user gave the address of waits to be continued. What a check
+    /// finds has no say in that.
     pub(crate) fn own_run(&self) -> bool {
-        self.phase == Phase::Ready && self.resume_file().is_some()
+        self.phase == Phase::Ready && self.resume_address().is_some()
     }
 
     /// The patch that is waiting to be applied, by what it goes by when it is kept from
-    /// starting by itself: the file the user picked, or the version the server's leads to.
+    /// starting by itself: the address the user gave, or the version the one a check found
+    /// leads to.
     pub(crate) fn waiting(&self) -> Option<&'a str> {
-        self.resume_file().or_else(|| self.target().map(|target| target.label.as_str()))
+        self.resume_address().or_else(|| self.target().map(|target| target.label.as_str()))
     }
 }
 
 /// What the app does by itself now, if anything.
+///
+/// Nothing at all until the app's home was asked once whether this version may still patch
+/// (see [`World::update_asked`]). A version that is too old does nothing by itself, and
+/// before it has asked it does not know whether it is one. Whether the home answered makes
+/// no difference: the app does its work without it.
 ///
 /// The game is started only when all of this holds: a patch was finished in this session
 /// and the user wants the game started after one; this site has no run at work; the game
@@ -782,11 +866,19 @@ impl<'a> Facts<'a> {
 ///
 /// A patch is started only when all of this holds: the user wants patches applied without
 /// being asked; no run is on the screen but, at most, one that is done; no run is at work
-/// for any client; there is a patch for the folder, or a run to continue; nothing is in
-/// the way, the game being open included; this version of the app may still patch; the
-/// patch has not had its turn in this session (see [`Flow::end`]); and the folder is not
-/// one that is patched at the user's press the first time (see [`Status::by_press_only`]).
+/// for any client; there is a patch from the server for the folder; nothing is in the way,
+/// the game being open included; this version of the app may still patch; the patch has not
+/// had its turn in this session (see [`Flow::end`]); the folder is not one that is patched
+/// at the user's press the first time (see [`Status::by_press_only`]); and no run of a
+/// patch the user gave the address of waits to be continued.
+///
+/// A run by an address the user gave is the user's to continue, in the session it was
+/// begun in and in any later one. The app takes up by itself what it found itself, and
+/// nothing that only a record says was once asked for.
 pub(crate) fn decide(facts: &Facts) -> Decision {
+    if !facts.update_asked {
+        return Decision::Nothing;
+    }
     if facts.game_due && facts.auto_start && !facts.phase.at_work() && facts.open != Some(false) {
         // What was found before the patch was put aside when it finished. So an answer is
         // one that was given since.
@@ -799,22 +891,27 @@ pub(crate) fn decide(facts: &Facts) -> Decision {
     // A folder of a client this app was never tried on is patched at the user's own press
     // the first time. From then on it is the app's to patch like any other.
     let by_press = facts.status.is_some_and(|status| status.by_press_only);
-    let free = rests && !by_press && !facts.run_at_work && !facts.outdated && facts.can_start() && !facts.blocked();
+    let own = facts.resume_address().is_some();
+    let held = by_press || own || facts.run_at_work || facts.outdated || facts.blocked();
+    let free = rests && !held && facts.can_start();
     if facts.auto_patch && free && facts.waiting().is_some_and(|waiting| !facts.hands_off.contains(waiting)) {
-        return Decision::StartPatch { file: facts.resume_file().map(str::to_owned) };
+        return Decision::StartPatch;
     }
     Decision::Nothing
 }
 
-/// The patch a run is to be begun of, when the user or the app itself asks for one: `file`
-/// when a patch file was picked for it, and otherwise what the screen offers. Or why none
-/// is begun.
+/// The patch a run is to be begun of, when the user or the app itself asks for one: the one
+/// at `address` when the user gave an address, and otherwise what the screen offers. Or why
+/// none is begun.
 ///
 /// With a run that stopped on the screen, the patch is that run's. From the ready screen
-/// it is the run that was left unfinished, when there is one, and else the patch the
-/// server has. `left` is the run that was last put away: the same patch taken up again
-/// stands on the screen where that one stood.
-pub(crate) fn pick(facts: &Facts, file: Option<&str>, left: Option<&Left>) -> Result<Pick, Refusal> {
+/// it is the run that was left unfinished, when there is one, and else the patch a check
+/// found. `left` is the run that was last put away: the same patch taken up again stands
+/// on the screen where that one stood.
+///
+/// The address of the patch a check found is that patch, whoever names it: a run of it is
+/// the app's own, to offer again and to take up again like any it found.
+pub(crate) fn pick(facts: &Facts, address: Option<&str>, left: Option<&Left>) -> Result<Pick, Refusal> {
     // What is known of the folder is from before the run that is at work, and holds for
     // nothing until that run has ended.
     if facts.phase.at_work() {
@@ -831,21 +928,22 @@ pub(crate) fn pick(facts: &Facts, file: Option<&str>, left: Option<&Left>) -> Re
         return Err(Refusal { kind: RefusalKind::Blocked, messages });
     }
     let halted = facts.run.filter(|_| facts.phase.halted());
-    let file = match (file, halted) {
-        (Some(file), _) => Some(file),
+    let address = match (address, halted) {
+        (Some(address), _) => Some(address),
         (None, Some(run)) => run.source.as_deref(),
-        (None, None) => facts.resume_file(),
+        (None, None) => facts.resume_address(),
     };
-    let patch = match (file, facts.target()) {
-        (Some(file), _) => Patch::File(file.to_owned()),
+    let address = address.filter(|address| facts.target().is_none_or(|found| found.url != *address));
+    let patch = match (address, facts.target()) {
+        (Some(address), _) => Patch::Given(address.to_owned()),
         (None, Some(target)) => Patch::Server(target.clone()),
         (None, None) => return Err(Refusal::new(RefusalKind::Nothing, "적용할 패치가 없습니다.")),
     };
     let label = match &patch {
-        Patch::File(_) => None,
+        Patch::Given(_) => None,
         Patch::Server(target) => Some(target.label.as_str()),
     };
-    let same = |source: &Option<String>, of: &Option<String>| source.as_deref() == file && of.as_deref() == label;
+    let same = |source: &Option<String>, of: &Option<String>| source.as_deref() == address && of.as_deref() == label;
     // What is on the screen stays, for the run that is gone on with from there. Otherwise
     // the bar begins where a run of this patch had come to, also when the app was closed
     // in between and only its record still knows.
@@ -853,7 +951,7 @@ pub(crate) fn pick(facts: &Facts, file: Option<&str>, left: Option<&Left>) -> Re
         (Some(run), _) => (run.percent, run.activity.clone()),
         (None, Some(left)) if same(&left.source, &left.label) => (left.percent, left.activity.clone()),
         _ => {
-            let on_record = status.resumable && file == status.resume_file.as_deref();
+            let on_record = status.resumable && address == status.resume_address.as_deref();
             (on_record.then_some(status.resume_percent).flatten().unwrap_or(0.0), String::new())
         }
     };
@@ -949,22 +1047,79 @@ fn check_due(now: Instant, next_check: Instant, checking: bool, running: bool, a
 pub(crate) enum OnClose {
     /// The window is put away, and whatever is at work goes on.
     Hide,
+    /// The window stays, and the user is asked whether the run at work is to go on with the
+    /// app next to the clock.
+    Ask,
     /// The run at work is asked to stop first; the app goes when it has.
     StopThenLeave,
     /// The window closes, and the app with it.
     Leave,
 }
 
-/// What closing the window does: `background` says that the user wants the app to stay at
-/// work next to the clock, `run_at_work` that a run is at work.
+/// How the app's one run stands when the window is asked to close.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AtClose {
+    /// No run is at work.
+    Idle,
+    /// A run is at work, and nothing was said of closing the window on it.
+    AtWork,
+    /// A run is at work, and the user is being asked what is to become of it: the window
+    /// was asked to close this long ago, and they have not answered.
+    Asked(Duration),
+    /// The run at work was asked to stop and has not stopped yet.
+    Stopping,
+}
+
+/// How long after the window was asked to close a second request is still the same press:
+/// a button pressed twice in a row, or a mouse button that bounces. Nobody has read a
+/// question in that time, and what comes then is no answer to it.
+const SAME_PRESS: Duration = Duration::from_millis(500);
+
+/// What closing the window does: `stays` says that the app stays at work next to the clock
+/// when its window is closed, `run` how the run stands.
 ///
-/// Closing during a run would cut the run off. It is asked to stop first, and an apply
-/// that has begun is finished.
-pub(crate) fn on_close(background: bool, run_at_work: bool) -> OnClose {
-    match (background, run_at_work) {
+/// Closing during a run would cut the run off, and a window is closed without a thought:
+/// the user is asked first whether the run is to go on, with the app next to the clock.
+/// Nothing here waits for the answer, though, or a page that has stopped, which asks
+/// nothing, would keep its window from ever closing. A window that is closed again over the
+/// question is one whose run is to stop, as is one whose run is stopping already: the run
+/// is asked to stop (an apply that has begun is finished), and the app goes when it has.
+/// Closed again within a moment of the first time, it is the same press, and changes
+/// nothing: the question stands as it was asked.
+pub(crate) fn on_close(stays: bool, run: AtClose) -> OnClose {
+    match (stays, run) {
         (true, _) => OnClose::Hide,
-        (false, true) => OnClose::StopThenLeave,
-        (false, false) => OnClose::Leave,
+        (false, AtClose::Idle) => OnClose::Leave,
+        (false, AtClose::AtWork) => OnClose::Ask,
+        (false, AtClose::Asked(since)) if since < SAME_PRESS => OnClose::Ask,
+        (false, AtClose::Asked(_) | AtClose::Stopping) => OnClose::StopThenLeave,
+    }
+}
+
+/// What the user answers when asked whether the run is to go on; see [`OnClose::Ask`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum CloseAnswer {
+    /// It is: the window is put away, and the app is next to the clock for the time being.
+    Background,
+    /// It is not: the run is asked to stop, and the app goes when it has.
+    Quit,
+    /// Neither: the question was put aside. The window stays, and the run goes on.
+    Stay,
+}
+
+impl CloseAnswer {
+    /// What the answer comes to. `open` says that the question was still open: the run it
+    /// was about is at work, and was not asked to stop.
+    ///
+    /// A run that has ended over the question goes on nowhere, and the window is not put
+    /// away for it: it stays, with how the run ended on it. Leaving is leaving, whatever
+    /// became of the run.
+    pub(crate) fn given(self, open: bool) -> CloseAnswer {
+        match self {
+            CloseAnswer::Background if !open => CloseAnswer::Stay,
+            answer => answer,
+        }
     }
 }
 
@@ -972,7 +1127,8 @@ pub(crate) fn on_close(background: bool, run_at_work: bool) -> OnClose {
 mod tests {
     use super::*;
     use crate::made::{
-        errored, game_at, game_open, half_patched, no_game_at, no_install, patch_to, resumable, up_to_date,
+        GIVEN, GIVEN_ANOTHER, GIVEN_BEFORE, GIVEN_OTHER, GIVEN_WRONG, errored, game_at, game_open, half_patched,
+        journal_unreadable, no_game_at, no_install, patch_to, resumable, up_to_date,
     };
 
     fn ended(answer: Availability, end: CheckEnd) -> Checked {
@@ -990,7 +1146,15 @@ mod tests {
 
     /// The world as it is on a quiet day: nothing set, nothing at work, the game open.
     fn world(now: Instant) -> World {
-        World { auto_patch: false, auto_start: false, outdated: false, run_at_work: false, open: Some(true), now }
+        World {
+            auto_patch: false,
+            auto_start: false,
+            outdated: false,
+            run_at_work: false,
+            open: Some(true),
+            update_asked: true,
+            now,
+        }
     }
 
     /// A site that has looked at its game folder and was told of the patch to 1.2.422.
@@ -1002,8 +1166,8 @@ mod tests {
     }
 
     /// Begins the run a start asks for, the way the app does.
-    fn begin(flow: &mut Flow, file: Option<&str>, now: Instant) -> Result<(), Refusal> {
-        let pick = pick(&flow.facts(&world(now)), file, flow.left())?;
+    fn begin(flow: &mut Flow, address: Option<&str>, now: Instant) -> Result<(), Refusal> {
+        let pick = pick(&flow.facts(&world(now)), address, flow.left())?;
         flow.begin(&pick, now);
         flow.at_work();
         Ok(())
@@ -1279,7 +1443,7 @@ mod tests {
         let mut flow = with_a_patch(start);
         assert_eq!(flow.phase, Phase::Ready);
         let pick = pick(&flow.facts(&world(start)), None, None).unwrap();
-        assert_eq!((pick.file(), pick.target().map(|target| target.label.as_str())), (None, Some("1.2.422")));
+        assert_eq!((pick.address(), pick.target().map(|target| target.label.as_str())), (None, Some("1.2.422")));
 
         flow.begin(&pick, start);
         assert_eq!(flow.phase, Phase::Starting);
@@ -1291,7 +1455,7 @@ mod tests {
         flow.at_work();
         assert_eq!(flow.phase, Phase::Running);
 
-        flow.hear(says(Step::Rebuild, 61.5, "생성중: Map001.wz"), start + seconds(30));
+        flow.hear(says(Step::Rebuild, 61.5, "생성 중: Map001.wz"), start + seconds(30));
         flow.end(RunEnd::Done { seconds: 95, files: 718 }, start + seconds(95));
         assert_eq!(flow.phase, Phase::Done);
         let run = flow.run.as_ref().unwrap();
@@ -1313,9 +1477,10 @@ mod tests {
         let at_work = World { run_at_work: true, ..world(start) };
         assert_eq!(decide(&flow.facts(&World { auto_patch: true, ..at_work })), Decision::Nothing);
         // Whoever asks, and for whichever patch: the folder is the run's until it has ended.
-        let asked = |flow: &Flow, file| pick(&flow.facts(&world(start)), file, None).map_err(|refusal| refusal.kind);
+        let asked =
+            |flow: &Flow, address| pick(&flow.facts(&world(start)), address, None).map_err(|refusal| refusal.kind);
         assert_eq!(asked(&flow, None), Err(RefusalKind::Busy));
-        assert_eq!(asked(&flow, Some(r"D:\patches\other.patch")), Err(RefusalKind::Busy));
+        assert_eq!(asked(&flow, Some(GIVEN_OTHER)), Err(RefusalKind::Busy));
         flow.stop(false);
         assert_eq!(asked(&flow, None), Err(RefusalKind::Busy));
         flow.end(RunEnd::Stopped, start);
@@ -1327,7 +1492,7 @@ mod tests {
         let start = Instant::now();
         let mut flow = with_a_patch(start);
         begin(&mut flow, None, start).unwrap();
-        flow.hear(says(Step::Rebuild, 61.5, "생성중: Map001.wz"), start + seconds(30));
+        flow.hear(says(Step::Rebuild, 61.5, "생성 중: Map001.wz"), start + seconds(30));
 
         assert!(flow.stop(false));
         assert_eq!(flow.phase, Phase::Stopping);
@@ -1335,32 +1500,209 @@ mod tests {
         flow.end(RunEnd::Stopped, start + seconds(31));
         assert_eq!(flow.phase, Phase::Paused);
         let run = flow.run.as_ref().unwrap();
-        assert_eq!((run.percent, run.activity.as_str(), run.failure.as_ref()), (61.5, "생성중: Map001.wz", None));
+        assert_eq!((run.percent, run.activity.as_str(), run.failure.as_ref()), (61.5, "생성 중: Map001.wz", None));
         // There is nothing to stop any more.
         assert!(!flow.stop(false));
         assert_eq!(flow.phase, Phase::Paused);
     }
 
-    /// Closing the window during a run, when the app is not set to stay next to the clock.
+    /// What closing the window does, for every way the app and its run can stand.
     #[test]
-    fn closing_during_a_run_stops_it_first_and_the_app_goes_when_it_has_stopped() {
-        assert_eq!(on_close(false, true), OnClose::StopThenLeave);
-        assert_eq!(on_close(false, false), OnClose::Leave);
-        // With the app set to stay at work, closing only puts the window away.
-        assert_eq!((on_close(true, true), on_close(true, false)), (OnClose::Hide, OnClose::Hide));
+    fn closing_the_window_asks_about_a_run_at_work_and_only_once() {
+        let table = [
+            // The app is not set to stay next to the clock.
+            (false, AtClose::Idle, OnClose::Leave),
+            (false, AtClose::AtWork, OnClose::Ask),
+            // Closed again in the same press: nothing was asked that anyone has read.
+            (false, AtClose::Asked(Duration::ZERO), OnClose::Ask),
+            (false, AtClose::Asked(Duration::from_millis(499)), OnClose::Ask),
+            // Closed again over the question, and closed on a run that is stopping.
+            (false, AtClose::Asked(Duration::from_millis(500)), OnClose::StopThenLeave),
+            (false, AtClose::Asked(seconds(60)), OnClose::StopThenLeave),
+            (false, AtClose::Stopping, OnClose::StopThenLeave),
+            // It stays there: closing only puts the window away, whatever is at work.
+            (true, AtClose::Idle, OnClose::Hide),
+            (true, AtClose::AtWork, OnClose::Hide),
+            (true, AtClose::Asked(Duration::ZERO), OnClose::Hide),
+            (true, AtClose::Asked(seconds(60)), OnClose::Hide),
+            (true, AtClose::Stopping, OnClose::Hide),
+        ];
+        for (stays, run, does) in table {
+            assert_eq!(on_close(stays, run), does, "stays: {stays}, run: {run:?}");
+        }
+    }
 
+    #[test]
+    fn an_answer_puts_the_window_away_only_for_a_run_that_is_still_asked_about() {
+        use CloseAnswer::{Background, Quit, Stay};
+        let table = [
+            (Background, true, Background),
+            // The run has ended over the question: the window stays where it is.
+            (Background, false, Stay),
+            (Quit, true, Quit),
+            (Quit, false, Quit),
+            (Stay, true, Stay),
+            (Stay, false, Stay),
+        ];
+        for (answer, open, comes_to) in table {
+            assert_eq!(answer.given(open), comes_to, "{answer:?}, open: {open}");
+        }
+        // The page says them by these names.
+        let named = |name: &str| serde_json::from_value::<CloseAnswer>(serde_json::json!(name)).ok();
+        assert_eq!((named("background"), named("quit"), named("stay")), (Some(Background), Some(Quit), Some(Stay)));
+        assert_eq!(named("leave"), None);
+    }
+
+    /// The way of patching is chosen on the ready screen, and the line for the room goes
+    /// by it: the folder is looked at again at once, also in a window nobody looks at.
+    #[test]
+    fn a_folder_is_looked_at_again_at_once_when_the_way_of_patching_is_chosen() {
+        let start = Instant::now();
+        let mut flow = with_a_patch(start);
+        flow.take_look(game_at(r"C:\Games\Maple"), start);
+        assert!(!flow.look_is_due(start + seconds(1), false, true));
+        flow.look_soon();
+        assert!(flow.look_is_due(start + seconds(1), false, true));
+        // Not beside the site's own run, which has the folder to itself.
+        assert!(!flow.look_is_due(start + seconds(1), true, true));
+    }
+
+    /// The window is asked to close, well after the question it has open was asked.
+    fn close(flow: &mut Flow, stays: bool) -> OnClose {
+        let asked_at = flow.run.as_ref().and_then(|run| run.asked_at);
+        flow.close(stays, asked_at.map_or_else(Instant::now, |at| at + seconds(2)))
+    }
+
+    /// A button that is pressed twice in a row, or a mouse that bounces, closes the window
+    /// twice within a moment. The second time is no answer to a question nobody has read.
+    #[test]
+    fn a_window_closed_twice_in_one_press_asks_once_and_stops_nothing() {
         let start = Instant::now();
         let mut flow = with_a_patch(start);
         begin(&mut flow, None, start).unwrap();
+        let pressed = start + seconds(10);
+        assert_eq!(flow.close(false, pressed), OnClose::Ask);
+        for again in [0, 150, 499] {
+            assert_eq!(flow.close(false, pressed + Duration::from_millis(again)), OnClose::Ask, "{again} ms");
+            assert_eq!(flow.phase, Phase::Running);
+        }
+        // The question counts from when it was first asked, however often the press came
+        // again. From half a second on, closing again is the answer it was before.
+        assert_eq!(flow.run.as_ref().unwrap().asked_at, Some(pressed));
+        assert_eq!(flow.close(false, pressed + Duration::from_millis(500)), OnClose::StopThenLeave);
+
+        // Answered and asked anew, it counts anew.
+        assert!(flow.answered());
+        assert_eq!(flow.run.as_ref().unwrap().asked_at, None);
+        let later = pressed + seconds(30);
+        assert_eq!(flow.close(false, later), OnClose::Ask);
+        assert_eq!(flow.close(false, later + Duration::from_millis(100)), OnClose::Ask);
+        assert_eq!(flow.close(false, later + seconds(1)), OnClose::StopThenLeave);
+    }
+
+    /// Closing the window during a run, when the app is not set to stay next to the clock.
+    #[test]
+    fn a_window_closed_on_a_run_asks_first_and_stops_the_run_when_it_is_closed_again() {
+        let start = Instant::now();
+        let mut flow = with_a_patch(start);
+        // Nothing is at work: there is nothing to ask about.
+        assert_eq!(close(&mut flow, false), OnClose::Leave);
+
+        begin(&mut flow, None, start).unwrap();
+        assert_eq!(close(&mut flow, false), OnClose::Ask);
+        assert_eq!(flow.phase, Phase::Running);
+        assert!(flow.run.as_ref().unwrap().asking);
+        // The question stands, whether or not a page shows it. Closed again, the run is
+        // asked to stop, and the app goes when it has: nothing more is asked from there.
+        assert_eq!(close(&mut flow, false), OnClose::StopThenLeave);
         assert!(flow.stop(true));
         assert_eq!(flow.phase, Phase::Stopping);
-        assert!(flow.run.as_ref().unwrap().leaving);
-        // A pause that was asked for before stays one that leaves once the window is closed.
+        let run = flow.run.as_ref().unwrap();
+        assert!(run.leaving && !run.asking);
+        assert_eq!(close(&mut flow, false), OnClose::StopThenLeave);
+        // An answer that comes now is one to a question that is over.
+        assert!(!flow.answered());
+        assert_eq!(CloseAnswer::Background.given(false), CloseAnswer::Stay);
+    }
+
+    #[test]
+    fn a_question_that_was_answered_is_asked_anew_at_the_next_close() {
+        let start = Instant::now();
+        let mut flow = with_a_patch(start);
+        // A run that still waits for its turn at the folder is at work as well.
+        let pick = pick(&flow.facts(&world(start)), None, None).unwrap();
+        flow.begin(&pick, start);
+        assert_eq!(close(&mut flow, false), OnClose::Ask);
+        // Answered, or put aside: the run goes on either way, and it is answered once.
+        assert!(flow.answered());
+        assert!(!flow.answered());
+        flow.at_work();
+        assert_eq!(flow.phase, Phase::Running);
+        assert!(!flow.run.as_ref().unwrap().asking);
+        assert_eq!(close(&mut flow, false), OnClose::Ask);
+    }
+
+    #[test]
+    fn a_run_that_is_stopping_is_not_asked_about() {
+        let start = Instant::now();
+        // Paused by the user, and the window closed before the run has stopped.
         let mut flow = with_a_patch(start);
         begin(&mut flow, None, start).unwrap();
         flow.stop(false);
-        flow.stop(true);
+        assert_eq!(close(&mut flow, false), OnClose::StopThenLeave);
+        assert!(!flow.run.as_ref().unwrap().asking);
+        // A pause that was asked for before stays one that leaves once the window is closed.
+        assert!(flow.stop(true));
+        assert_eq!(flow.phase, Phase::Stopping);
         assert!(flow.run.as_ref().unwrap().leaving);
+
+        // Paused over the question: the question goes with it.
+        let mut flow = with_a_patch(start);
+        begin(&mut flow, None, start).unwrap();
+        assert_eq!(close(&mut flow, false), OnClose::Ask);
+        flow.stop(false);
+        assert!(!flow.answered());
+        assert_eq!(close(&mut flow, false), OnClose::StopThenLeave);
+    }
+
+    #[test]
+    fn a_run_that_ends_over_the_question_takes_the_question_with_it() {
+        let start = Instant::now();
+        for end in [
+            RunEnd::Done { seconds: 95, files: 718 },
+            failed("새 게임 파일 검사에 실패했습니다."),
+            refused("디스크 공간이 부족합니다."),
+        ] {
+            let mut flow = with_a_patch(start);
+            begin(&mut flow, None, start).unwrap();
+            assert_eq!(close(&mut flow, false), OnClose::Ask);
+            flow.end(end, start + seconds(1));
+            // How it ended stays on the screen, and the window with it: an answer that
+            // would have put the window away comes to nothing.
+            assert!(flow.run.as_ref().is_some_and(|run| !run.asking));
+            assert_eq!(CloseAnswer::Background.given(flow.answered()), CloseAnswer::Stay);
+            // Closed now, the window closes.
+            assert_eq!(close(&mut flow, false), OnClose::Leave);
+        }
+
+        // The run after it is asked about like any other.
+        let mut flow = with_a_patch(start);
+        begin(&mut flow, None, start).unwrap();
+        assert_eq!(close(&mut flow, false), OnClose::Ask);
+        flow.end(failed("새 게임 파일 검사에 실패했습니다."), start + seconds(1));
+        begin(&mut flow, None, start + seconds(2)).unwrap();
+        assert!(!flow.run.as_ref().unwrap().asking);
+        assert_eq!(close(&mut flow, false), OnClose::Ask);
+    }
+
+    #[test]
+    fn an_app_that_stays_next_to_the_clock_asks_nothing() {
+        let start = Instant::now();
+        let mut flow = with_a_patch(start);
+        begin(&mut flow, None, start).unwrap();
+        assert_eq!(close(&mut flow, true), OnClose::Hide);
+        assert!(!flow.run.as_ref().unwrap().asking);
+        assert_eq!(flow.phase, Phase::Running);
     }
 
     #[test]
@@ -1412,7 +1754,7 @@ mod tests {
         let start = Instant::now();
         let mut flow = with_a_patch(start);
         begin(&mut flow, None, start).unwrap();
-        flow.hear(says(Step::Rebuild, 50.0, "생성중: Map001.wz"), start);
+        flow.hear(says(Step::Rebuild, 50.0, "생성 중: Map001.wz"), start);
         let details = vec!["Map001.wz".to_owned()];
         flow.end(
             RunEnd::Failed {
@@ -1426,7 +1768,7 @@ mod tests {
 
         // Tried again and turned down: what is in the way is the headline, the figures under it.
         begin(&mut flow, None, start).unwrap();
-        flow.hear(says(Step::VerifyInstall, 50.0, "검사중: Map001.wz"), start);
+        flow.hear(says(Step::VerifyInstall, 50.0, "검사 중: Map001.wz"), start);
         let no_room = "디스크 공간이 부족합니다.\nC: 여유 공간을 34.6 GB 이상 확보해 주세요. (현재 15.8 GB)";
         flow.end(refused(no_room), start);
         assert_eq!(flow.phase, Phase::Failed);
@@ -1442,7 +1784,7 @@ mod tests {
         let start = Instant::now();
         let mut flow = with_a_patch(start);
         begin(&mut flow, None, start).unwrap();
-        let told = flow.hear(says(Step::Rebuild, 61.5, "생성중: Map001.wz"), start).unwrap();
+        let told = flow.hear(says(Step::Rebuild, 61.5, "생성 중: Map001.wz"), start).unwrap();
         assert_eq!(told.percent, 61.5);
         flow.end(RunEnd::Stopped, start);
 
@@ -1450,11 +1792,11 @@ mod tests {
         // through once more, and the figure waits for them.
         begin(&mut flow, None, start).unwrap();
         let run = flow.run.as_ref().unwrap();
-        assert_eq!((run.percent, run.activity.as_str(), run.step), (61.5, "생성중: Map001.wz", None));
-        let told = flow.hear(says(Step::VerifyInstall, 33.0, "검사중: Base.wz"), start).unwrap();
+        assert_eq!((run.percent, run.activity.as_str(), run.step), (61.5, "생성 중: Map001.wz", None));
+        let told = flow.hear(says(Step::VerifyInstall, 33.0, "검사 중: Base.wz"), start).unwrap();
         assert_eq!((told.percent, told.step), (61.5, Some(Step::VerifyInstall)));
-        assert_eq!(flow.run.as_ref().unwrap().activity, "검사중: Base.wz");
-        let told = flow.hear(says(Step::Rebuild, 70.25, "생성중: Skill.wz"), start).unwrap();
+        assert_eq!(flow.run.as_ref().unwrap().activity, "검사 중: Base.wz");
+        let told = flow.hear(says(Step::Rebuild, 70.25, "생성 중: Skill.wz"), start).unwrap();
         assert_eq!(told.percent, 70.25);
     }
 
@@ -1463,18 +1805,18 @@ mod tests {
         let start = Instant::now();
         let mut flow = with_a_patch(start);
         begin(&mut flow, None, start).unwrap();
-        flow.hear(says(Step::Rebuild, 61.5, "생성중: Map001.wz"), start);
+        flow.hear(says(Step::Rebuild, 61.5, "생성 중: Map001.wz"), start);
         flow.end(RunEnd::Stopped, start);
         flow.dismiss();
         assert_eq!((flow.phase, flow.run.as_ref()), (Phase::Ready, None));
 
         begin(&mut flow, None, start).unwrap();
         let run = flow.run.as_ref().unwrap();
-        assert_eq!((run.percent, run.activity.as_str()), (61.5, "생성중: Map001.wz"));
+        assert_eq!((run.percent, run.activity.as_str()), (61.5, "생성 중: Map001.wz"));
         // It is remembered for that patch and no other, and once.
         flow.end(RunEnd::Stopped, start);
         flow.dismiss();
-        begin(&mut flow, Some(r"D:\patches\00421to00422.patch"), start).unwrap();
+        begin(&mut flow, Some(GIVEN), start).unwrap();
         assert_eq!(flow.run.as_ref().unwrap().percent, 0.0);
         assert!(flow.left().is_none());
     }
@@ -1489,13 +1831,13 @@ mod tests {
         begin(&mut flow, None, start).unwrap();
         assert_eq!(flow.run.as_ref().unwrap().percent, 69.25);
 
-        // A file the user had picked, likewise, and only that file.
-        let file = r"D:\patches\00421to00422.patch";
+        // A patch the user had given the address of, likewise, and only that one.
+        let address = GIVEN;
         let mut flow = Flow::new(start);
-        flow.take_look(resumable(game_at(r"C:\Games\Maple"), Some(file), Some(12.5)), start);
+        flow.take_look(resumable(game_at(r"C:\Games\Maple"), Some(address), Some(12.5)), start);
         let picked = pick(&flow.facts(&world(start)), None, None).unwrap();
-        assert_eq!((picked.file(), picked.percent), (Some(file), 12.5));
-        let other = pick(&flow.facts(&world(start)), Some(r"D:\patches\other.patch"), None).unwrap();
+        assert_eq!((picked.address(), picked.percent), (Some(address), 12.5));
+        let other = pick(&flow.facts(&world(start)), Some(GIVEN_OTHER), None).unwrap();
         assert_eq!(other.percent, 0.0);
     }
 
@@ -1510,40 +1852,40 @@ mod tests {
         // The game is still to be started after it.
         assert!(flow.game_due);
         // A run at work is not put away.
-        begin(&mut flow, Some(r"D:\patches\a.patch"), start).unwrap();
+        begin(&mut flow, Some(GIVEN_ANOTHER), start).unwrap();
         flow.dismiss();
         assert_eq!(flow.phase, Phase::Running);
     }
 
     #[test]
-    fn a_half_patched_folder_resumes_only_the_file_on_record() {
+    fn a_half_patched_folder_resumes_only_the_patch_on_record() {
         let start = Instant::now();
-        let on_record = r"D:\patches\00420to00421.patch";
+        let on_record = GIVEN_BEFORE;
         let mut flow = Flow::new(start);
         flow.take_look(half_patched(game_at(r"C:\Games\Maple"), Some(on_record), Some(41.0)), start);
-        // The user tried another file in the meantime, and it is the one still in mind.
-        flow.source = Some(r"D:\patches\other.patch".to_owned());
+        // The user tried another address in the meantime, and it is the one still in mind.
+        flow.source = Some(GIVEN_OTHER.to_owned());
         let facts = flow.facts(&world(start));
-        assert_eq!(facts.resume_file(), Some(on_record));
-        assert_eq!(pick(&facts, None, None).unwrap().file(), Some(on_record));
+        assert_eq!(facts.resume_address(), Some(on_record));
+        assert_eq!(pick(&facts, None, None).unwrap().address(), Some(on_record));
 
-        // In a whole folder with work left in it, the file that was last picked is gone on with.
+        // In a whole folder with work left in it, the address that was last given is gone on with.
         let mut flow = Flow::new(start);
         flow.take_look(resumable(game_at(r"C:\Games\Maple"), Some(on_record), Some(41.0)), start);
-        flow.source = Some(r"D:\patches\other.patch".to_owned());
-        assert_eq!(flow.facts(&world(start)).resume_file(), Some(r"D:\patches\other.patch"));
+        flow.source = Some(GIVEN_OTHER.to_owned());
+        assert_eq!(flow.facts(&world(start)).resume_address(), Some(GIVEN_OTHER));
     }
 
     #[test]
-    fn a_wrong_file_that_is_refused_returns_to_the_ready_screen_of_the_half_patched_folder() {
+    fn a_wrong_patch_that_is_refused_returns_to_the_ready_screen_of_the_half_patched_folder() {
         let start = Instant::now();
         let mut flow = Flow::new(start);
         flow.take_look(half_patched(game_at(r"C:\Games\Maple"), None, Some(41.0)), start);
         take(&mut flow, 0, ended(patch_to("1.2.421"), CheckEnd::Answered), start);
-        let wrong = r"D:\patches\00421to00422.patch";
+        let wrong = GIVEN;
         begin(&mut flow, Some(wrong), start).unwrap();
         // It got as far as the check of the patch file before the engine turned it down.
-        flow.hear(says(Step::VerifyPatch, 4.0, "검사중: 00421to00422.patch"), start);
+        flow.hear(says(Step::VerifyPatch, 4.0, "검사 중: 00420to00422.patch"), start);
         flow.end(refused("진행 중인 패치와 다른 패치 파일입니다."), start);
 
         assert_eq!(flow.phase, Phase::Ready);
@@ -1555,7 +1897,7 @@ mod tests {
         );
         // The patch to finish is still the one that is offered, and may still start by itself.
         let facts = flow.facts(&World { auto_patch: true, ..world(start) });
-        assert_eq!(facts.resume_file(), None);
+        assert_eq!(facts.resume_address(), None);
         let offered = pick(&facts, None, None).unwrap();
         assert_eq!(offered.target().map(|target| target.label.as_str()), Some("1.2.421"));
         assert!(flow.hands_off.contains(wrong) && !flow.hands_off.contains("1.2.421"));
@@ -1565,7 +1907,7 @@ mod tests {
         flow.take_look(half_patched(game_at(r"C:\Games\Maple"), None, Some(41.0)), start);
         take(&mut flow, 0, ended(patch_to("1.2.421"), CheckEnd::Answered), start);
         begin(&mut flow, None, start).unwrap();
-        flow.hear(says(Step::Rebuild, 60.0, "생성중: Map001.wz"), start);
+        flow.hear(says(Step::Rebuild, 60.0, "생성 중: Map001.wz"), start);
         flow.end(failed("파일 처리 중 오류가 발생했습니다."), start);
         assert_eq!(flow.phase, Phase::Failed);
     }
@@ -1574,8 +1916,8 @@ mod tests {
     fn a_folder_that_is_changed_takes_the_run_on_its_screen_with_it() {
         let start = Instant::now();
         let mut flow = with_a_patch(start);
-        begin(&mut flow, Some(r"D:\patches\a.patch"), start).unwrap();
-        flow.hear(says(Step::Rebuild, 61.5, "생성중: Map001.wz"), start);
+        begin(&mut flow, Some(GIVEN_ANOTHER), start).unwrap();
+        flow.hear(says(Step::Rebuild, 61.5, "생성 중: Map001.wz"), start);
         flow.end(RunEnd::Stopped, start);
         assert!(flow.take_look(game_at(r"D:\Copy\Maple"), start));
         assert_eq!(
@@ -1622,22 +1964,22 @@ mod tests {
             (nothing.kind, nothing.messages),
             (RefusalKind::Nothing, vec!["적용할 패치가 없습니다.".to_owned()])
         );
-        // A file that was picked needs no patch from the server.
-        assert!(pick(&up.facts(&world(start)), Some(r"D:\patches\a.patch"), None).is_ok());
+        // An address the user gives needs no patch a check has found.
+        assert!(pick(&up.facts(&world(start)), Some(GIVEN_ANOTHER), None).is_ok());
     }
 
     #[test]
     fn a_run_that_stopped_is_gone_on_with_by_its_own_patch() {
         let start = Instant::now();
-        let file = r"D:\patches\00421to00422.patch";
+        let address = GIVEN;
         let mut flow = with_a_patch(start);
-        begin(&mut flow, Some(file), start).unwrap();
-        flow.hear(says(Step::Rebuild, 61.5, "생성중: Map001.wz"), start);
+        begin(&mut flow, Some(address), start).unwrap();
+        flow.hear(says(Step::Rebuild, 61.5, "생성 중: Map001.wz"), start);
         flow.end(failed("파일 처리 중 오류가 발생했습니다."), start);
-        // The button under a run that stopped asks for no file: the run's own is meant, not
-        // the patch the server has.
+        // The button under a run that stopped names no address: the run's own is meant, not
+        // the patch a check has found.
         let again = pick(&flow.facts(&world(start)), None, flow.left()).unwrap();
-        assert_eq!((again.file(), again.target(), again.percent), (Some(file), None, 61.5));
+        assert_eq!((again.address(), again.target(), again.percent), (Some(address), None, 61.5));
     }
 
     // What the app does by itself.
@@ -1651,7 +1993,7 @@ mod tests {
     fn a_patch_starts_by_itself_when_the_user_wants_that_and_nothing_is_in_the_way() {
         let start = Instant::now();
         let (flow, world) = wanting(start);
-        assert_eq!(decide(&flow.facts(&world)), Decision::StartPatch { file: None });
+        assert_eq!(decide(&flow.facts(&world)), Decision::StartPatch);
         // Not without the setting.
         assert_eq!(decide(&flow.facts(&World { auto_patch: false, ..world })), Decision::Nothing);
     }
@@ -1688,7 +2030,7 @@ mod tests {
         assert_eq!(decide(&flow.facts(&world)), Decision::Nothing);
         // It is closed again: the patch starts.
         flow.take_look(game_at(r"C:\Games\Maple"), start);
-        assert_eq!(decide(&flow.facts(&world)), Decision::StartPatch { file: None });
+        assert_eq!(decide(&flow.facts(&world)), Decision::StartPatch);
         // A version of the app that is too old patches nothing by itself either.
         assert_eq!(decide(&flow.facts(&World { outdated: true, ..world })), Decision::Nothing);
     }
@@ -1700,7 +2042,7 @@ mod tests {
         {
             let (mut flow, world) = wanting(start);
             begin(&mut flow, None, start).unwrap();
-            flow.hear(says(Step::Rebuild, 61.5, "생성중: Map001.wz"), start);
+            flow.hear(says(Step::Rebuild, 61.5, "생성 중: Map001.wz"), start);
             flow.end(end.clone(), start);
             flow.dismiss();
             assert_eq!(flow.phase, Phase::Ready);
@@ -1709,11 +2051,11 @@ mod tests {
             begin(&mut flow, None, start).unwrap();
             flow.end(RunEnd::Done { seconds: 60, files: 10 }, start);
             take(&mut flow, 0, ended(patch_to("1.2.423"), CheckEnd::Answered), start);
-            assert_eq!(decide(&flow.facts(&world)), Decision::StartPatch { file: None }, "{end:?}");
+            assert_eq!(decide(&flow.facts(&world)), Decision::StartPatch, "{end:?}");
         }
         // A new session knows nothing of it.
         let (fresh, world) = wanting(start);
-        assert_eq!(decide(&fresh.facts(&world)), Decision::StartPatch { file: None });
+        assert_eq!(decide(&fresh.facts(&world)), Decision::StartPatch);
     }
 
     #[test]
@@ -1721,28 +2063,71 @@ mod tests {
         let start = Instant::now();
         let (mut flow, world) = wanting(start);
         begin(&mut flow, None, start).unwrap();
-        flow.hear(says(Step::Rebuild, 61.5, "생성중: Map001.wz"), start);
+        flow.hear(says(Step::Rebuild, 61.5, "생성 중: Map001.wz"), start);
         flow.end(RunEnd::Stopped, start);
         flow.dismiss();
-        begin(&mut flow, Some(r"D:\patches\a.patch"), start).unwrap();
-        flow.hear(says(Step::VerifyPatch, 2.0, "검사중: a.patch"), start);
+        begin(&mut flow, Some(GIVEN_ANOTHER), start).unwrap();
+        flow.hear(says(Step::VerifyPatch, 2.0, "검사 중: 00420to00423.patch"), start);
         flow.end(failed("패치 파일 검사에 실패했습니다."), start);
         flow.dismiss();
         assert_eq!(decide(&flow.facts(&world)), Decision::Nothing);
-        assert!(flow.hands_off.contains("1.2.422") && flow.hands_off.contains(r"D:\patches\a.patch"));
+        assert!(flow.hands_off.contains("1.2.422") && flow.hands_off.contains(GIVEN_ANOTHER));
     }
 
+    /// After a restart, what was left unfinished is only known from the records. A run of
+    /// the server's own patch is taken up by itself once the server offers that patch
+    /// again. A run by an address the user gave is not, whatever the server has: the app
+    /// takes up by itself what it found itself, and nothing that only a record says was
+    /// once asked for.
     #[test]
-    fn a_run_that_was_left_unfinished_when_the_app_was_closed_is_taken_up_by_itself() {
+    fn of_the_runs_left_unfinished_when_the_app_was_closed_only_the_servers_patch_is_taken_up_by_itself() {
         let start = Instant::now();
-        let file = r"D:\patches\00421to00422.patch";
-        let mut flow = Flow::new(start);
-        flow.take_look(resumable(game_at(r"C:\Games\Maple"), Some(file), Some(12.5)), start);
         let world = World { auto_patch: true, ..world(start) };
-        // The server has no say in that: its answer is not waited for.
-        assert_eq!(decide(&flow.facts(&world)), Decision::StartPatch { file: Some(file.to_owned()) });
-        flow.keep_hands_off(file.to_owned());
+        let mut flow = Flow::new(start);
+        flow.take_look(resumable(game_at(r"C:\Games\Maple"), None, Some(12.5)), start);
         assert_eq!(decide(&flow.facts(&world)), Decision::Nothing);
+        take(&mut flow, 0, ended(patch_to("1.2.422"), CheckEnd::Answered), start);
+        assert_eq!(decide(&flow.facts(&world)), Decision::StartPatch);
+
+        let address = GIVEN;
+        for answer in [None, Some(patch_to("1.2.422"))] {
+            let mut flow = Flow::new(start);
+            flow.take_look(resumable(game_at(r"C:\Games\Maple"), Some(address), Some(12.5)), start);
+            if let Some(answer) = answer {
+                take(&mut flow, 0, ended(answer, CheckEnd::Answered), start);
+            }
+            assert_eq!(decide(&flow.facts(&world)), Decision::Nothing);
+            // It is there to be continued at a press, and that press continues that patch.
+            let facts = flow.facts(&world);
+            assert!(facts.own_run() && facts.can_start());
+            let continued = pick(&facts, None, None).unwrap();
+            assert_eq!((continued.address(), continued.percent), (Some(address), 12.5));
+        }
+        // So it is for a folder such a run left partly new.
+        let mut flow = Flow::new(start);
+        flow.take_look(half_patched(game_at(r"C:\Games\Maple"), Some(address), Some(41.0)), start);
+        take(&mut flow, 0, ended(errored("이전 패치 미완료"), CheckEnd::Answered), start);
+        assert_eq!(decide(&flow.facts(&world)), Decision::Nothing);
+    }
+
+    /// Whether this version may still patch is asked of the app's home as the app starts.
+    /// Until that was tried once, the app does nothing by itself; once it was, it goes on
+    /// whether or not there was an answer.
+    #[test]
+    fn nothing_is_done_by_itself_before_the_apps_home_was_asked_once() {
+        let start = Instant::now();
+        let (flow, asked) = wanting(start);
+        let not_asked = World { update_asked: false, ..asked };
+        assert_eq!(decide(&flow.facts(&not_asked)), Decision::Nothing);
+        assert_eq!(decide(&flow.facts(&asked)), Decision::StartPatch);
+        // The user's own press waits for nothing.
+        assert!(pick(&flow.facts(&not_asked), None, None).is_ok());
+
+        let (mut flow, asked) = patched(start);
+        take(&mut flow, 0, ended(up_to_date("1.2.422"), CheckEnd::Answered), start);
+        assert_eq!(decide(&flow.facts(&World { update_asked: false, ..asked })), Decision::Nothing);
+        // Nothing was given up meanwhile: the game is still to be started.
+        assert_eq!(decide(&flow.facts(&asked)), Decision::StartGame);
     }
 
     #[test]
@@ -1755,7 +2140,7 @@ mod tests {
         // Not before the server has said what there is for the folder as it is now.
         assert_eq!(decide(&flow.facts(&world)), Decision::Nothing);
         take(&mut flow, 0, ended(patch_to("1.2.423"), CheckEnd::Answered), start);
-        assert_eq!(decide(&flow.facts(&world)), Decision::StartPatch { file: None });
+        assert_eq!(decide(&flow.facts(&world)), Decision::StartPatch);
     }
 
     /// What the page shows is none of the app's business: a failure that is still being
@@ -1766,14 +2151,11 @@ mod tests {
         let mut flow = Flow::new(start);
         flow.take_look(half_patched(game_at(r"C:\Games\Maple"), None, Some(41.0)), start);
         take(&mut flow, 0, ended(patch_to("1.2.421"), CheckEnd::Answered), start);
-        begin(&mut flow, Some(r"D:\patches\wrong.patch"), start).unwrap();
-        flow.hear(says(Step::VerifyPatch, 4.0, "검사중: wrong.patch"), start);
+        begin(&mut flow, Some(GIVEN_WRONG), start).unwrap();
+        flow.hear(says(Step::VerifyPatch, 4.0, "검사 중: 00420to00425.patch"), start);
         flow.end(refused("진행 중인 패치와 다른 패치 파일입니다."), start);
         assert!(flow.run.as_ref().is_some_and(|run| run.failure.is_some()));
-        assert_eq!(
-            decide(&flow.facts(&World { auto_patch: true, ..world(start) })),
-            Decision::StartPatch { file: None }
-        );
+        assert_eq!(decide(&flow.facts(&World { auto_patch: true, ..world(start) })), Decision::StartPatch);
     }
 
     /// A site whose patch has just gone through, with the user wanting the game started.
@@ -1837,7 +2219,7 @@ mod tests {
             flow.game_due = false;
             let then = decide(&flow.facts(&World { auto_patch: true, ..world }));
             let patch_waits = flow.answer.as_ref().is_some_and(|answer| answer.target.is_some());
-            assert_eq!(then == Decision::StartPatch { file: None }, patch_waits);
+            assert_eq!(then == Decision::StartPatch, patch_waits);
         }
     }
 
@@ -1846,7 +2228,7 @@ mod tests {
         let start = Instant::now();
         let (mut flow, world) = patched(start);
         take(&mut flow, 0, ended(up_to_date("1.2.422"), CheckEnd::Answered), start);
-        begin(&mut flow, Some(r"D:\patches\a.patch"), start).unwrap();
+        begin(&mut flow, Some(GIVEN_ANOTHER), start).unwrap();
         // A run that begins takes the game's turn: it is due again when the patch is done.
         assert!(!flow.game_due);
         // Nor would it be started under a run, were it still due.
@@ -1859,10 +2241,10 @@ mod tests {
         let start = Instant::now();
         let mut flow = with_a_patch(start);
         begin(&mut flow, None, start).unwrap();
-        flow.hear(says(Step::Download, 3.0, "다운로드중: 00421to00422.patch"), start);
+        flow.hear(says(Step::Download, 3.0, "다운로드 중: 00421to00422.patch"), start);
         assert!(!flow.facts(&world(start + seconds(4))).quiet);
         assert!(flow.facts(&world(start + seconds(5))).quiet);
-        flow.hear(says(Step::Download, 3.5, "다운로드중: 00421to00422.patch"), start + seconds(6));
+        flow.hear(says(Step::Download, 3.5, "다운로드 중: 00421to00422.patch"), start + seconds(6));
         assert!(!flow.facts(&world(start + seconds(7))).quiet);
 
         flow.launched(start);
@@ -1958,6 +2340,92 @@ mod tests {
         // Once this app has patched the folder, the look says so, and the next patch is
         // the app's to start.
         flow.take_look(game_at(r"C:\Games\MapleT"), start);
-        assert_eq!(decide(&flow.facts(&wanting)), Decision::StartPatch { file: None });
+        assert_eq!(decide(&flow.facts(&wanting)), Decision::StartPatch);
+    }
+
+    /// An address the user gives again for a run of it that is there to be gone on with is
+    /// the address of that run, and not a new one to ask about.
+    #[test]
+    fn a_run_by_an_address_that_is_there_to_be_gone_on_with_is_known_by_that_address() {
+        let start = Instant::now();
+        let (address, other) = (GIVEN, GIVEN_OTHER);
+        // The run that stopped on the screen.
+        let mut flow = with_a_patch(start);
+        assert!(!flow.facts(&world(start)).continues(address));
+        begin(&mut flow, Some(address), start).unwrap();
+        flow.hear(says(Step::Rebuild, 61.5, "생성 중: Map001.wz"), start);
+        flow.end(RunEnd::Stopped, start);
+        let facts = flow.facts(&world(start));
+        assert!(facts.continues(address) && !facts.continues(other));
+
+        // The run that a session before left on record.
+        let mut flow = Flow::new(start);
+        flow.take_look(resumable(game_at(r"C:\Games\Maple"), Some(address), Some(12.5)), start);
+        let facts = flow.facts(&world(start));
+        assert!(facts.continues(address) && !facts.continues(other));
+
+        // A run of the patch a check found goes by no address.
+        let mut flow = with_a_patch(start);
+        begin(&mut flow, None, start).unwrap();
+        flow.hear(says(Step::Rebuild, 61.5, "생성 중: Map001.wz"), start);
+        flow.end(RunEnd::Stopped, start);
+        assert!(!flow.facts(&world(start)).continues(address));
+    }
+
+    /// The address of the patch a check found is that patch, whoever names it. A run of it
+    /// is the app's own: it is what the screen offers, what is offered again after a pause,
+    /// and what the app may take up by itself. Any other address is the user's own word.
+    #[test]
+    fn the_address_of_the_patch_the_app_found_is_that_patch_and_any_other_is_the_users_own() {
+        let start = Instant::now();
+        let mut flow = with_a_patch(start);
+        let found = flow.answer.as_ref().and_then(|answer| answer.target.clone()).expect("the patch a check found");
+
+        let own = pick(&flow.facts(&world(start)), Some(&found.url), None).unwrap();
+        assert_eq!((own.address(), own.target()), (None, Some(&found)));
+        let given = pick(&flow.facts(&world(start)), Some(GIVEN), None).unwrap();
+        assert_eq!((given.address(), given.target()), (Some(GIVEN), None));
+
+        // A run by the user's own address that stopped is on the screen. Giving the address
+        // of the patch the app found begins that patch, and not the run's again.
+        begin(&mut flow, Some(GIVEN), start).unwrap();
+        flow.hear(says(Step::Rebuild, 61.5, "생성 중: Map001.wz"), start);
+        flow.end(RunEnd::Stopped, start);
+        let facts = flow.facts(&world(start));
+        assert_eq!(pick(&facts, None, flow.left()).unwrap().address(), Some(GIVEN));
+        let own = pick(&facts, Some(&found.url), flow.left()).unwrap();
+        assert_eq!((own.address(), own.target(), own.percent), (None, Some(&found), 0.0));
+
+        // A start by address is turned down for what any start is turned down for.
+        let outdated = pick(&flow.facts(&World { outdated: true, ..world(start) }), Some(GIVEN), None).unwrap_err();
+        assert_eq!(outdated.kind, RefusalKind::Outdated);
+        let mut playing = with_a_patch(start);
+        playing.take_look(game_open(game_at(r"C:\Games\Maple")), start);
+        assert_eq!(pick(&playing.facts(&world(start)), Some(GIVEN), None).unwrap_err().kind, RefusalKind::Blocked);
+        let mut nowhere = Flow::new(start);
+        nowhere.take_look(no_install(), start);
+        assert_eq!(pick(&nowhere.facts(&world(start)), Some(GIVEN), None).unwrap_err().kind, RefusalKind::Nothing);
+    }
+
+    /// An apply was cut off in the folder and its record cannot be read. Nothing is started
+    /// over it: not by the app, not at a press, not by an address, and not when a patch
+    /// should be found for the folder all the same. There is no run to go on with either.
+    #[test]
+    fn nothing_is_started_over_an_apply_whose_record_cannot_be_read() {
+        let start = Instant::now();
+        let said = "이전 패치 작업 기록이 손상되었습니다.\n공식 런처로 게임을 복구해 주세요.";
+        let wanting = World { auto_patch: true, auto_start: true, ..world(start) };
+        let mut flow = Flow::new(start);
+        flow.take_look(journal_unreadable(game_at(r"C:\Games\Maple")), start);
+        for answer in [errored("작업 기록 손상"), patch_to("1.2.422")] {
+            take(&mut flow, 0, ended(answer, CheckEnd::Answered), start);
+            assert_eq!(decide(&flow.facts(&wanting)), Decision::Nothing);
+            for address in [None, Some(GIVEN)] {
+                let refusal = pick(&flow.facts(&world(start)), address, None).unwrap_err();
+                assert_eq!((refusal.kind, refusal.messages), (RefusalKind::Blocked, vec![said.to_owned()]));
+            }
+            let facts = flow.facts(&world(start));
+            assert!(!facts.own_run() && facts.resume_address().is_none());
+        }
     }
 }

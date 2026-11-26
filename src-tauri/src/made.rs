@@ -4,18 +4,30 @@
 use crate::flow::Run;
 use crate::state::{Availability, Check, CheckKind, Status, Target};
 
+/// Addresses the user gives for a patch, each another than that of the patch a check finds
+/// (see [`target`]): the tests of the rules for a run by address tell them apart by these.
+pub(crate) const GIVEN: &str = "https://maplestory.dn.nexoncdn.co.kr/Patch/00422/00420to00422.patch";
+pub(crate) const GIVEN_OTHER: &str = "https://maplestory.dn.nexoncdn.co.kr/Patch/00424/00420to00424.patch";
+pub(crate) const GIVEN_ANOTHER: &str = "https://maplestory.dn.nexoncdn.co.kr/Patch/00423/00420to00423.patch";
+pub(crate) const GIVEN_WRONG: &str = "https://maplestory.dn.nexoncdn.co.kr/Patch/00425/00420to00425.patch";
+pub(crate) const GIVEN_BEFORE: &str = "https://maplestory.dn.nexoncdn.co.kr/Patch/00421/00420to00421.patch";
+
 /// What a look finds at `dir`, with the checks it made.
 pub(crate) fn folder(dir: Option<&str>, checks: Vec<Check>) -> Status {
     Status {
         install_dir: dir.map(str::to_owned),
         version: None,
+        next_address: None,
         checks,
         custom_dir: false,
         leftover: None,
         resumable: false,
-        resume_file: None,
+        resume_address: None,
         resume_percent: None,
         half_patched: false,
+        unreadable_journal: false,
+        putting_back: false,
+        unread_patch: None,
         by_press_only: false,
     }
 }
@@ -66,12 +78,12 @@ pub(crate) fn no_install() -> Status {
     folder(None, vec![none])
 }
 
-/// The same folder with a run left unfinished in it, which can be continued: of `file` when
-/// the user had picked one, and as far along as `percent`.
-pub(crate) fn resumable(status: Status, file: Option<&str>, percent: Option<f64>) -> Status {
+/// The same folder with a run left unfinished in it, which can be continued: of the patch
+/// at `address` when the user had given one, and as far along as `percent`.
+pub(crate) fn resumable(status: Status, address: Option<&str>, percent: Option<f64>) -> Status {
     Status {
         resumable: true,
-        resume_file: file.map(str::to_owned),
+        resume_address: address.map(str::to_owned),
         resume_percent: percent,
         leftover: Some("12.3 GB".to_owned()),
         ..status
@@ -79,8 +91,16 @@ pub(crate) fn resumable(status: Status, file: Option<&str>, percent: Option<f64>
 }
 
 /// The same folder left partly new by a run that replaced game files as it built them.
-pub(crate) fn half_patched(status: Status, file: Option<&str>, percent: Option<f64>) -> Status {
-    Status { half_patched: true, version: None, ..resumable(status, file, percent) }
+pub(crate) fn half_patched(status: Status, address: Option<&str>, percent: Option<f64>) -> Status {
+    Status { half_patched: true, version: None, ..resumable(status, address, percent) }
+}
+
+/// The same folder with an apply cut off in it whose record cannot be read: nothing to go on
+/// with, and what the run left still there.
+pub(crate) fn journal_unreadable(status: Status) -> Status {
+    let message = "이전 패치 작업 기록이 손상되었습니다.\n공식 런처로 게임을 복구해 주세요.";
+    let status = with_check(status, Check::failed(CheckKind::Recovery, "작업 기록 손상", message));
+    Status { unreadable_journal: true, leftover: Some("12.3 GB".to_owned()), version: None, ..status }
 }
 
 /// The patch from the server that leads to `label`.
@@ -88,7 +108,7 @@ pub(crate) fn target(label: &str) -> Target {
     Target {
         label: label.to_owned(),
         size: 1_288_490_189,
-        url: format!("https://maplestory.dn.nexoncdn.co.kr/Patch/00422/{label}.patch"),
+        url: "https://maplestory.dn.nexoncdn.co.kr/Patch/00422/00421to00422.patch".to_owned(),
         file_name: "00421to00422.patch".to_owned(),
         version: 422,
         minor: None,
@@ -98,6 +118,13 @@ pub(crate) fn target(label: &str) -> Target {
 /// The answer of a check that found the patch to `label` for the install.
 pub(crate) fn patch_to(label: &str) -> Availability {
     Availability { target: Some(target(label)), latest: Some(label.to_owned()), error: None }
+}
+
+/// The answer of a check that found a minor patch for the install, which leads to minor
+/// `minor` of the version it is at: `label` is that version with the minor behind it.
+pub(crate) fn minor_patch_to(label: &str, minor: u32) -> Availability {
+    let target = Target { version: 421, minor: Some(minor), ..target(label) };
+    Availability { target: Some(target), latest: Some(label.to_owned()), error: None }
 }
 
 /// The answer of a check that found the install at the newest version, `latest`.
@@ -110,13 +137,15 @@ pub(crate) fn errored(error: &str) -> Availability {
     Availability { error: Some(error.to_owned()), ..Availability::nothing() }
 }
 
-/// A run of the patch from the server to `label`, or of the file `source`, that has said
-/// nothing yet.
+/// A run of the patch from the server to `label`, or of the one at the address `source`,
+/// that has said nothing yet.
 pub(crate) fn run_of(source: Option<&str>, label: Option<&str>) -> Run {
     Run {
         source: source.map(str::to_owned),
         label: label.map(str::to_owned),
         leaving: false,
+        asking: false,
+        asked_at: None,
         percent: 0.0,
         step: None,
         done: 0,

@@ -33,6 +33,30 @@ struct Site {
     damage_next: bool,
     /// Send the whole file even when asked for a part.
     ignore_range: bool,
+    /// Answer every request by sending the asker on to this address.
+    redirect: Option<String>,
+    /// The size of the file as the answers to downloads state it, where that is not the
+    /// size the question was told.
+    stated_len: Option<usize>,
+    /// The size of the file as the second download and those after it state it.
+    stated_len_later: Option<usize>,
+    /// Send the bytes that lie this far behind the ones asked for, as if they were the
+    /// ones asked for.
+    shift: usize,
+    /// The tag that the second download and those after it carry.
+    etag_later: Option<String>,
+    /// Read every request and never answer it.
+    mute: bool,
+    /// After this many bytes of a download, keep the connection and send nothing more.
+    stall_after: Option<usize>,
+    /// Send a download a byte at a time, with this long between two bytes.
+    trickle: Option<Duration>,
+    /// Send downloads without saying how long they are, and never end them.
+    endless: bool,
+    /// Put a header of this many bytes into every answer.
+    header_bytes: usize,
+    /// Downloads answered so far.
+    downloads: usize,
     /// One line per request: the method and the range asked for.
     log: Vec<String>,
     /// Who each request said it came from. Empty for a request that did not say.
@@ -50,9 +74,12 @@ impl Server {
         let url = format!("http://{}/file.patch", listener.local_addr().unwrap());
         let site = Arc::new(Mutex::new(Site { body, etag: "\"v1\"".into(), ..Site::default() }));
         let shared = site.clone();
+        // Every connection is answered on a thread of its own: a server that holds one
+        // connection without a word still takes the next.
         std::thread::spawn(move || {
             for connection in listener.incoming().flatten() {
-                let _ = answer(connection, &shared);
+                let site = shared.clone();
+                std::thread::spawn(move || answer(connection, &site));
             }
         });
         Server { url, site }
@@ -99,6 +126,18 @@ fn answer(mut connection: TcpStream, site: &Mutex<Site>) -> std::io::Result<()> 
         None => method.clone(),
     });
     site.senders.push(sender);
+    if site.mute {
+        drop(site);
+        return hold(connection);
+    }
+    if let Some(to) = &site.redirect {
+        let head = format!("HTTP/1.1 302 Found\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        return connection.write_all(head.as_bytes());
+    }
+    let padding = match site.header_bytes {
+        0 => String::new(),
+        bytes => format!("X-Padding: {}\r\n", "a".repeat(bytes)),
+    };
     let mut status = site.status;
     if method == "GET" && site.unavailable_next > 0 {
         site.unavailable_next -= 1;
@@ -110,6 +149,8 @@ fn answer(mut connection: TcpStream, site: &Mutex<Site>) -> std::io::Result<()> 
     }
 
     let total = site.body.len();
+    let later = site.stated_len_later.filter(|_| site.downloads >= 1);
+    let stated = site.stated_len.or(later).unwrap_or(total);
     // The part of the file to send: all of it unless a part was asked for and is honoured.
     let part = match range {
         Some((start, end)) if !site.ignore_range && if_range.as_ref().is_none_or(|tag| *tag == site.etag) => {
@@ -123,21 +164,33 @@ fn answer(mut connection: TcpStream, site: &Mutex<Site>) -> std::io::Result<()> 
                 .write_all(b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         }
         Some((start, end)) => format!(
-            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{}/{total}\r\nContent-Length: {}\r\n",
+            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{}/{stated}\r\nContent-Length: {}\r\n",
             end - 1,
             end - start
         ),
+        None if site.endless && method == "GET" => "HTTP/1.1 200 OK\r\n".to_owned(),
+        None if method == "GET" => format!("HTTP/1.1 200 OK\r\nContent-Length: {stated}\r\n"),
+        // The question is told the truth. It is the downloads that lie.
         None => format!("HTTP/1.1 200 OK\r\nContent-Length: {total}\r\n"),
     };
+    if method == "GET" {
+        site.downloads += 1;
+    }
+    let etag = match &site.etag_later {
+        Some(later) if method == "GET" && site.downloads >= 2 => later.clone(),
+        _ => site.etag.clone(),
+    };
     connection.write_all(
-        format!("{head}ETag: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n", site.etag).as_bytes(),
+        format!("{head}{padding}ETag: {etag}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n").as_bytes(),
     )?;
     if method != "GET" {
         return Ok(());
     }
 
     let (start, end) = part.unwrap_or((0, total));
-    let mut payload = site.body[start..end].to_vec();
+    let shifted = |at: usize| (at + site.shift).min(total);
+    let mut payload = site.body[shifted(start)..shifted(end)].to_vec();
+    payload.resize(end - start, 0);
     // Damage lands on the last byte of the file, wherever the request that carries it starts.
     if end == total
         && std::mem::take(&mut site.damage_next)
@@ -151,8 +204,33 @@ fn answer(mut connection: TcpStream, site: &Mutex<Site>) -> std::io::Result<()> 
     if let Some(position) = site.down_from {
         payload.truncate(position.saturating_sub(start));
     }
+    let (stall_after, trickle, endless) = (site.stall_after, site.trickle, site.endless);
     drop(site);
-    connection.write_all(&payload)
+    if let Some(sent) = stall_after {
+        connection.write_all(&payload[..sent.min(payload.len())])?;
+        return hold(connection);
+    }
+    if let Some(between) = trickle {
+        for byte in payload {
+            connection.write_all(&[byte])?;
+            std::thread::sleep(between);
+        }
+        return Ok(());
+    }
+    connection.write_all(&payload)?;
+    if endless {
+        loop {
+            connection.write_all(&[0x5A; 1 << 16])?;
+        }
+    }
+    Ok(())
+}
+
+/// Keeps a connection without sending anything on it, until the other side lets go of it.
+fn hold(mut connection: TcpStream) -> std::io::Result<()> {
+    connection.set_read_timeout(Some(Duration::from_secs(120)))?;
+    let _ = std::io::Read::read(&mut connection, &mut [0u8; 16]);
+    Ok(())
 }
 
 fn temp_dest() -> (tempfile::TempDir, PathBuf) {
@@ -227,7 +305,7 @@ fn connection_that_keeps_dropping_is_survived_as_long_as_bytes_arrive() {
     // the downloader has patience for, but none of them without progress.
     let site = server.site.clone();
     server.set(|site| site.down_from = Some(20_000));
-    let impatient = download::Patience { attempts: 2, first_wait: Duration::ZERO };
+    let impatient = download::Patience { attempts: 2, first_wait: Duration::ZERO, ..Default::default() };
     download::fetch_with(&server.url, &dest, impatient, &GO, &mut |done, _| {
         site.lock().unwrap().down_from = Some(done as usize / 20_000 * 20_000 + 20_000);
     })
@@ -243,7 +321,7 @@ fn server_having_a_bad_moment_is_asked_again() {
     let (_dir, dest) = temp_dest();
 
     server.set(|site| site.unavailable_next = 2);
-    let patience = download::Patience { attempts: 5, first_wait: Duration::from_millis(1) };
+    let patience = download::Patience { attempts: 5, first_wait: Duration::from_millis(1), ..Default::default() };
     download::fetch_with(&server.url, &dest, patience, &GO, &mut |_, _| {}).unwrap();
     assert!(fs::read(&dest).unwrap() == body);
     assert_eq!(server.log(), ["HEAD", "GET from 0", "GET from 0", "GET from 0"]);
@@ -270,7 +348,7 @@ fn continuing_near_the_end_from_a_server_that_cannot_send_pieces_gets_the_whole_
     let server = Server::start(body.clone());
     let (_dir, dest) = temp_dest();
     server.set(|site| site.down_from = Some(8_500_000));
-    let patience = download::Patience { attempts: 1, first_wait: Duration::ZERO };
+    let patience = download::Patience { attempts: 1, first_wait: Duration::ZERO, ..Default::default() };
     download::fetch_with(&server.url, &dest, patience, &GO, &mut |_, _| {}).unwrap_err();
     assert_eq!(fs::metadata(download::part_path(&dest)).unwrap().len(), 8_500_000);
 
@@ -287,7 +365,7 @@ fn continuing_near_the_end_from_a_server_that_cannot_send_pieces_gets_the_whole_
 /// Downloads the first 120,000 bytes and then fails, as on a line that went dead.
 fn fetch_the_start(server: &Server, dest: &Path) -> Error {
     server.set(|site| site.down_from = Some(120_000));
-    let patience = download::Patience { attempts: 3, first_wait: Duration::from_millis(1) };
+    let patience = download::Patience { attempts: 3, first_wait: Duration::from_millis(1), ..Default::default() };
     let err = download::fetch_with(&server.url, dest, patience, &GO, &mut |_, _| {}).unwrap_err();
     server.set(|site| site.down_from = None);
     err
@@ -428,7 +506,7 @@ fn file_that_is_not_on_the_server_is_reported_as_not_published() {
     // A server error is asked about again, and reported when it does not pass.
     server.set(|site| site.status = Some(500));
     let asked_before = server.log().len();
-    let patience = download::Patience { attempts: 3, first_wait: Duration::from_millis(1) };
+    let patience = download::Patience { attempts: 3, first_wait: Duration::from_millis(1), ..Default::default() };
     let err = download::fetch_with(&server.url, &dest, patience, &GO, &mut |_, _| {}).unwrap_err();
     assert!(matches!(err, Error::Download { status: Some(500), .. }), "unexpected error: {err}");
     assert_eq!(server.log().len() - asked_before, 3, "the question was not asked three times");
@@ -506,7 +584,7 @@ fn file_replaced_after_it_was_asked_about_is_not_taken_for_the_one_asked_about()
         site.body = replacement.clone();
         site.etag = "\"v2\"".into();
     });
-    let patience = download::Patience { attempts: 2, first_wait: Duration::from_millis(1) };
+    let patience = download::Patience { attempts: 2, first_wait: Duration::from_millis(1), ..Default::default() };
     let err = session.fetch(&server.url, &dest, told, patience, &GO, &mut |_, _| {}).unwrap_err();
     assert!(matches!(err, Error::Download { status: Some(_), .. }), "unexpected error: {err}");
     assert!(!dest.exists(), "a file that was not asked about was accepted");
@@ -776,4 +854,272 @@ fn damaged_patch_file_of_a_half_patched_install_is_replaced_only_by_the_same_fil
     assert!(outcome.immediate && outcome.files_changed > 0, "{outcome:?}");
     world.assert_patched("after the damaged patch file was fetched again");
     assert!(fs::read(&dest).unwrap() == patch);
+}
+
+// ---------------------------------------------------------------------------------------
+// A server that lies, or that is not the server it should be.
+// ---------------------------------------------------------------------------------------
+
+/// Patience for the tests of servers that lie: two tries, no waiting between them, and half
+/// a second of silence in the middle of an answer.
+fn short_patience() -> download::Patience {
+    download::Patience { attempts: 2, first_wait: Duration::ZERO, silence: Duration::from_millis(500) }
+}
+
+/// Starts a download on a thread of its own and pauses it once `ready` says so. Returns how
+/// the download ended, or `None` if it had not ended five seconds after the pause: a
+/// download that cannot be paused.
+fn pause_when(
+    server: &Server,
+    dest: &Path,
+    patience: download::Patience,
+    ready: impl Fn() -> bool,
+) -> Option<Result<download::Remote, Error>> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let (done, result) = std::sync::mpsc::channel();
+    let (url, dest, paused) = (server.url.clone(), dest.to_path_buf(), stop.clone());
+    std::thread::spawn(move || drop(done.send(download::fetch_with(&url, &dest, patience, &paused, &mut |_, _| {}))));
+    let begun = std::time::Instant::now();
+    while !ready() && begun.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(ready(), "the download never came to the point where it was to be paused");
+    stop.store(true, Ordering::Relaxed);
+    result.recv_timeout(Duration::from_secs(5)).ok()
+}
+
+#[test]
+fn download_from_a_server_that_went_silent_can_be_paused_at_once() {
+    let body = Rng::new(40).bytes(200_000);
+    // A server that sends pieces, and one that only sends the whole file: the second has no
+    // time limit of its own to fall back on.
+    for whole_only in [false, true] {
+        let server = Server::start(body.clone());
+        server.set(|site| (site.stall_after, site.ignore_range) = (Some(50_000), whole_only));
+        let (_dir, dest) = temp_dest();
+        let part = download::part_path(&dest);
+        let arrived = || fs::metadata(&part).is_ok_and(|meta| meta.len() >= 50_000);
+
+        let ended = pause_when(&server, &dest, download::Patience::default(), arrived);
+        let ended = ended.unwrap_or_else(|| panic!("whole only: {whole_only}: the pause was not heard"));
+        assert!(matches!(ended, Err(Error::Stopped)), "whole only: {whole_only}: {ended:?}");
+
+        // What arrived before the silence is kept, and a server that sends pieces again is
+        // asked only for the rest.
+        assert_eq!(fs::read(&part).unwrap(), body[..50_000], "whole only: {whole_only}");
+        server.set(|site| (site.stall_after, site.ignore_range) = (None, false));
+        fetch(&server, &dest).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), body, "whole only: {whole_only}");
+        assert!(server.log().iter().any(|line| line == "GET from 50000"), "{:?}", server.log());
+    }
+}
+
+#[test]
+fn question_to_a_server_that_never_answers_can_be_paused_at_once() {
+    let server = Server::start(Rng::new(41).bytes(1000));
+    server.set(|site| site.mute = true);
+    let (_dir, dest) = temp_dest();
+    let asked = || !server.log().is_empty();
+    let ended = pause_when(&server, &dest, download::Patience::default(), asked);
+    assert!(matches!(ended, Some(Err(Error::Stopped))), "{ended:?}");
+    assert!(!dest.exists() && !download::part_path(&dest).exists());
+}
+
+#[test]
+fn server_that_goes_silent_is_given_up_on_and_not_waited_for() {
+    let body = Rng::new(42).bytes(100_000);
+    for whole_only in [false, true] {
+        let server = Server::start(body.clone());
+        // Silent from the first byte: no request gains anything.
+        server.set(|site| (site.stall_after, site.ignore_range) = (Some(0), whole_only));
+        let (_dir, dest) = temp_dest();
+        let begun = std::time::Instant::now();
+        let err = download::fetch_with(&server.url, &dest, short_patience(), &GO, &mut |_, _| {}).unwrap_err();
+        assert!(matches!(err, Error::Download { status: None, .. }), "whole only: {whole_only}: {err}");
+        assert!(begun.elapsed() < Duration::from_secs(10), "given up after {:?}", begun.elapsed());
+        assert!(!dest.exists(), "whole only: {whole_only}");
+    }
+}
+
+#[test]
+fn server_that_sends_a_byte_now_and_then_is_borne_with_and_can_be_paused() {
+    // A byte every few milliseconds is a slow line, and the file arrives.
+    let body = Rng::new(43).bytes(300);
+    let server = Server::start(body.clone());
+    server.set(|site| site.trickle = Some(Duration::from_millis(2)));
+    let (_dir, dest) = temp_dest();
+    download::fetch_with(&server.url, &dest, short_patience(), &GO, &mut |_, _| {}).unwrap();
+    assert_eq!(fs::read(&dest).unwrap(), body);
+
+    // A byte less often than the silence that is borne: every request gains a byte before
+    // it is given up, and a download that gains is not given up. It never ends by itself,
+    // which is what a line this bad comes to; but it is paused the moment that is asked.
+    let server = Server::start(body.clone());
+    server.set(|site| site.trickle = Some(Duration::from_millis(1500)));
+    let (_dir, dest) = temp_dest();
+    let part = download::part_path(&dest);
+    let third_try = || server.log().iter().filter(|line| line.starts_with("GET")).count() >= 3;
+    let ended = pause_when(&server, &dest, short_patience(), third_try);
+    assert!(matches!(ended, Some(Err(Error::Stopped))), "{ended:?}");
+    let kept = fs::read(&part).unwrap();
+    assert!(!kept.is_empty() && kept[..] == body[..kept.len()], "{} bytes kept", kept.len());
+}
+
+#[test]
+fn download_without_end_is_cut_off_at_the_size_that_was_announced() {
+    let body = Rng::new(44).bytes(100_000);
+    let server = Server::start(body.clone());
+    server.set(|site| (site.endless, site.ignore_range) = (true, true));
+    let (_dir, dest) = temp_dest();
+    let err = download::fetch_with(&server.url, &dest, short_patience(), &GO, &mut |_, _| {}).unwrap_err();
+    assert!(matches!(err, Error::Download { status: Some(200), .. }), "{err}");
+    // Not a byte more than the file was said to have was written.
+    let kept = fs::metadata(download::part_path(&dest)).map_or(0, |meta| meta.len());
+    assert!(kept <= body.len() as u64 && !dest.exists(), "{kept} bytes kept");
+
+    // The same from a server that sends pieces, each under a heading that says how long it
+    // is: what comes behind the stated length of a piece is never read, and the file is
+    // the file.
+    let server = Server::start(body.clone());
+    server.set(|site| site.endless = true);
+    let (_dir, dest) = temp_dest();
+    download::fetch_with(&server.url, &dest, short_patience(), &GO, &mut |_, _| {}).unwrap();
+    assert_eq!(fs::read(&dest).unwrap(), body);
+}
+
+#[test]
+fn size_that_changes_between_the_question_and_the_download_is_not_believed() {
+    let body = Rng::new(45).bytes(100_000);
+    for (stated, whole_only) in [(100_001, false), (99_999, false), (200_000, true), (50_000, true), (0, false)] {
+        let server = Server::start(body.clone());
+        server.set(|site| (site.stated_len, site.ignore_range) = (Some(stated), whole_only));
+        let (_dir, dest) = temp_dest();
+        let result = download::fetch_with(&server.url, &dest, short_patience(), &GO, &mut |_, _| {});
+        let what = format!("{stated} stated, whole only: {whole_only}");
+        match (result, whole_only) {
+            // A piece that says it is of a file of another size is refused as it comes.
+            (Err(Error::Download { status: Some(206), .. }), false) => {}
+            // A whole file under a smaller size ends before the size the question was told.
+            // It is asked for again, and given up.
+            (Err(Error::Download { status: None, .. }), true) if stated < body.len() => {}
+            // Under a greater size, everything the question was told of does come, and
+            // nothing after it: that is the file.
+            (Ok(_), true) if stated > body.len() => {
+                assert_eq!(fs::read(&dest).unwrap(), body, "{what}");
+                continue;
+            }
+            (other, _) => panic!("{what}: {other:?}"),
+        }
+        assert!(!dest.exists(), "{what}: a file was made of it");
+    }
+}
+
+#[test]
+fn size_that_changes_between_two_pieces_ends_the_download() {
+    // Three pieces. The first is of a file of the size the question was told. The next says
+    // it is of a file one byte longer.
+    let body = Rng::new(51).bytes(20 << 20);
+    let server = Server::start(body.clone());
+    server.set(|site| site.stated_len_later = Some(body.len() + 1));
+    let (_dir, dest) = temp_dest();
+    let err = download::fetch_with(&server.url, &dest, short_patience(), &GO, &mut |_, _| {}).unwrap_err();
+    assert!(matches!(err, Error::Download { status: Some(206), .. }), "{err}");
+    // The piece that came under the right size is kept, and nothing is put behind it.
+    let part = fs::read(download::part_path(&dest)).unwrap();
+    assert!(part.len() == 8 << 20 && part[..] == body[..part.len()] && !dest.exists(), "{} bytes kept", part.len());
+}
+
+#[test]
+fn tag_that_changes_between_two_pieces_ends_the_download() {
+    // Three pieces. The question and the first piece carry one tag, the pieces after it
+    // another: the file was replaced, or the server is of two minds.
+    let body = Rng::new(46).bytes(20 << 20);
+    let server = Server::start(body.clone());
+    server.set(|site| site.etag_later = Some("\"v2\"".into()));
+    let (_dir, dest) = temp_dest();
+    let err = download::fetch_with(&server.url, &dest, short_patience(), &GO, &mut |_, _| {}).unwrap_err();
+    assert!(matches!(&err, Error::Download { status: Some(206), detail } if detail.contains("changed")), "{err}");
+    // Nothing of the second file was put behind the first piece of the first.
+    let part = fs::read(download::part_path(&dest)).unwrap();
+    assert!(part.len() <= 8 << 20 && part[..] == body[..part.len()] && !dest.exists(), "{} bytes kept", part.len());
+}
+
+#[test]
+fn redirects_are_followed_to_a_server_and_to_nothing_else() {
+    let body = Rng::new(47).bytes(50_000);
+    let elsewhere = Server::start(body.clone());
+    let fetch_from = |to: &str| {
+        let server = Server::start(b"not the file".to_vec());
+        server.set(|site| site.redirect = Some(to.replace("{self}", &server.url)));
+        let (dir, dest) = temp_dest();
+        let begun = std::time::Instant::now();
+        let result = download::fetch_with(&server.url, &dest, short_patience(), &GO, &mut |_, _| {});
+        assert!(begun.elapsed() < Duration::from_secs(20), "{to}: answered after {:?}", begun.elapsed());
+        (result.map(|_| fs::read(&dest).unwrap()), dir)
+    };
+
+    // To another server: followed, as a browser would. Over plain HTTP nothing says which
+    // server is the right one in the first place.
+    assert_eq!(fetch_from(&elsewhere.url).0.unwrap(), body);
+    // To itself, for ever: given up.
+    assert!(matches!(fetch_from("{self}").0, Err(Error::Download { .. })));
+    // To a file of this PC, to a share, to a program, to nowhere: not followed, and nothing
+    // of this PC is read into a download.
+    let windows = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()).replace('\\', "/");
+    for to in [
+        format!("file:///{windows}/win.ini"),
+        format!("file://localhost/{windows}/win.ini"),
+        r"\\localhost\C$\Windows\win.ini".to_owned(),
+        "ftp://127.0.0.1/file.patch".to_owned(),
+        "javascript:alert(1)".to_owned(),
+        "data:application/octet-stream;base64,V3pQYXRjaBo=".to_owned(),
+        dead_address(),
+        String::new(),
+    ] {
+        let (result, dir) = fetch_from(&to);
+        assert!(matches!(result, Err(Error::Download { .. })), "{to}: {result:?}");
+        assert!(files_under(dir.path()).is_empty(), "{to}: something was written");
+    }
+}
+
+#[test]
+fn answer_with_a_header_of_a_megabyte_is_refused() {
+    let server = Server::start(Rng::new(48).bytes(1000));
+    server.set(|site| site.header_bytes = 1 << 20);
+    let (dir, dest) = temp_dest();
+    let begun = std::time::Instant::now();
+    let err = download::fetch_with(&server.url, &dest, short_patience(), &GO, &mut |_, _| {}).unwrap_err();
+    assert!(matches!(err, Error::Download { .. }), "{err}");
+    assert!(begun.elapsed() < Duration::from_secs(10) && files_under(dir.path()).is_empty());
+}
+
+#[test]
+fn page_of_a_login_wall_where_the_patch_should_be_is_not_taken_for_a_patch() {
+    // What a hotel or a campus network sends for any address until one has signed in: a
+    // page, with the answer "200 OK" and a size, and no tag.
+    let world = World::random(49, Layout::Table);
+    let page = b"<!DOCTYPE html><html><head><title>Sign in</title></head><body>Please sign in.</body></html>";
+    let server = Server::start(page.repeat(40));
+    server.set(|site| site.etag = String::new());
+    let (_dir, dest) = temp_dest();
+
+    let err = run(&options(&world, &server, &dest), &GO, &mut |_| {}).unwrap_err();
+    assert!(matches!(err, Error::NotAPatchFile), "unexpected error: {err}");
+    world.assert_untouched("after a page was served for the patch");
+    assert!(!dest.exists(), "the page was kept as if it were the patch file");
+}
+
+#[test]
+fn piece_from_the_wrong_place_under_the_right_heading_never_reaches_the_install() {
+    // The server says it sends the bytes that were asked for and sends those a little
+    // further on. Nothing in the answer shows it; the checksum of the patch file does.
+    let world = World::random(50, Layout::Table);
+    let server = Server::start(fs::read(&world.patch).unwrap());
+    server.set(|site| site.shift = 16);
+    let (_dir, dest) = temp_dest();
+
+    let err = run(&options(&world, &server, &dest), &GO, &mut |_| {}).unwrap_err();
+    assert!(matches!(err, Error::NotAPatchFile | Error::CorruptPatch(_)), "unexpected error: {err}");
+    world.assert_untouched("after pieces from the wrong place");
+    assert!(!dest.exists(), "the damaged file was kept for the next run");
 }
