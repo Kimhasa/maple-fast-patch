@@ -1,0 +1,18 @@
+[package]
+name = "mfp-tools"
+description = "Programs for trying real patch files on test folders, and a made-up world to try the app against. Not part of the app."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+mfp-engine = { path = "../engine" }
+# Which programs and which addresses belong to which of the two clients.
+mfp-kms = { path = "../kms" }
+# The made-up world writes patch files with the builder of the engine's own tests, which
+# compresses them the way the engine expects.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+
+[dev-dependencies]
+tempfile = "3.27"

@@ -1,0 +1,29 @@
+[package]
+name = "maple-fast-patch"
+description = "MapleStory patch helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+# The `_lib` suffix keeps the lib name from clashing with the bin name on Windows
+# (https://github.com/rust-lang/cargo/issues/8519).
+name = "maple_fast_patch_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+mfp-kms = { path = "../crates/kms" }
+mfp-engine = { path = "../crates/engine" }
+tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Power", "Win32_System_SystemInformation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

@@ -1,0 +1,9 @@
+[package]
+name = "mfp-kms"
+description = "Facts about the Korean MapleStory client and Nexon's services for it: install folder, patch file addresses, launcher, maintenance notices."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"

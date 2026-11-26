@@ -1,0 +1,30 @@
+# Frontend
+node_modules
+/build
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+.env
+.env.*
+!.env.example
+
+# Rust
+/target
+# Local-only cargo settings (build output location differs per machine)
+/.cargo/config.toml
+
+# Nexon artwork must never be committed
+design/backgrounds/
+
+# Built app, copied here for convenience
+/dist
+
+# Working notes and study material, kept on this PC only
+/research
+/docs
+/reference
+
+# Measurement tools and their records (the records name this PC's account and folders)
+/bench
+
+# The font is NEXON's and is not handed on from here; see THIRD-PARTY-NOTICES.md
+/public/fonts/

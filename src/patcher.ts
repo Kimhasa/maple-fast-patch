@@ -1,0 +1,470 @@
+// What the window knows and what it can do. The pages and the frame around them only draw this.
+//
+// What a client's page says is decided in the backend, which looks after the game whether
+// the window is there or not; this keeps what it last said. What is the window's own is
+// here too: which page and which dialog is open, and how fast a run is going.
+//
+// The state lives here, outside React, because most of what changes it does not come from
+// the screen: what the backend says, a run as it goes, a timer. Every action reads the
+// state as it is at that moment, never a copy from an earlier render.
+
+import {
+  askAgain,
+  copyText,
+  defaultSettings,
+  discardLeftovers,
+  dismissRun,
+  foreignOrigin,
+  launchGame,
+  onSaid,
+  onShown,
+  openDownloadPage,
+  openReleasePage,
+  opensOn,
+  pickFolder,
+  pickPatchFile,
+  runReport,
+  setInstallDir,
+  setSettings,
+  startPatch,
+  stopPatch,
+  takeSnapshot,
+  type AppView,
+  type AppWord,
+  type Progress,
+  type Refusal,
+  type ServerId,
+  type Settings,
+  type SiteView,
+} from "./api";
+
+/** A download that brings nothing for this long is not timed: nothing is arriving. */
+const QUIET_MS = 4000;
+/** How many lines the ready screen has room for at their usual height. */
+const ROWS_AT_EASE = 5;
+
+/** What the window shows beside its sidebar: the page of a client, or the settings. */
+export type Page = ServerId | "settings";
+
+export type State = {
+  /** What the backend last said of everything the screen shows. Of a client, nothing until it has. */
+  app: AppView;
+  /** The page that is open. `null` until it is settled where the app opens. */
+  page: Page | null;
+  dialog: "none" | "blocked" | "failed" | "ask";
+  /** What the "ask" dialog asks, the line under it, and what a yes does. */
+  question: { message: string; detail: string; yes: () => void } | null;
+  /** What the "failed" dialog says: a headline, the reason, and any further lines. */
+  failure: { title: string; message: string | null; details: string[] } | null;
+  /**
+   * The start that was turned down for what is in the way: whose it was, and what the
+   * backend said was in the way. The "blocked" dialog says that until the page lists it.
+   */
+  blocked: { server: ServerId; messages: string[] } | null;
+  /** How the finished run went was just copied; the button that copies it says so for a moment. */
+  copied: boolean;
+  /** How fast the current step is going, in bytes a second. Measured for the two long steps. */
+  speed: number;
+  /** Seconds the current step still needs, once it has been watched long enough to say. */
+  left: number | null;
+};
+
+let state: State = {
+  app: { sites: [], settings: defaultSettings, update: null, running: null },
+  page: opensOn,
+  dialog: "none",
+  question: null,
+  failure: null,
+  blocked: null,
+  copied: false,
+  speed: 0,
+  left: null,
+};
+
+/** The reading the download speed is measured from. */
+let speedFrom: { at: number; bytes: number } | null = null;
+/**
+ * Readings of the current step, one a second, for the time it still needs. The speed of one
+ * second says little about that: building goes several times faster through some files than
+ * through others. The estimate goes by the last stretch as a whole, and is only made once
+ * there is enough of it. It counts what this run worked for itself (`worked`): files an
+ * earlier run had built are only checked, many times faster than files are built.
+ */
+let pace: { at: number; bytes: number }[] = [];
+const PACE_READINGS = 20;
+const PACE_MS = 5000;
+/** When the run last said where it is. */
+let heardAt = 0;
+/** How many times the backend has said what is not of one client. */
+let wordsHeard = 0;
+/** The backend has said which clients there are. Until then one of them may be all that is known. */
+let clientsKnown = false;
+/** The last failure of each client's runs that a dialog has shown. Each is shown once. */
+const failuresShown = new Map<ServerId, number>();
+/** The game is being started: a second press does nothing until the first is answered. */
+let launching = false;
+
+const listeners = new Set<() => void>();
+
+function set(change: Partial<State>) {
+  state = { ...state, ...change };
+  for (const listener of listeners) listener();
+}
+
+/** For React's `useSyncExternalStore`. */
+export function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+export const getState = () => state;
+
+/**
+ * The page the app opens on: that of a client with a run that was left unfinished, and
+ * otherwise the live game's.
+ */
+function opening(sites: SiteView[]): Page | null {
+  const unfinished = sites.find(
+    (site) => (site.phase !== "ready" && site.phase !== "done") || site.halfPatched || site.button.kind === "resume",
+  );
+  return (unfinished ?? sites.find((site) => site.server === "live") ?? sites[0])?.server ?? null;
+}
+
+/** What a client's page lists as being in the way of a patch, a sentence each. */
+const inTheWayOf = (site: SiteView | undefined) =>
+  site?.rows.filter((row) => row.ok === false).map((row) => row.message) ?? [];
+
+/** Everything the screen shows that follows from the state. */
+export function view(s: State) {
+  const { sites } = s.app;
+  /** The page that is open. Until that is settled, it is the one the app would open on. */
+  const page = s.page ?? opening(sites);
+  /** The client whose page is open; none while the settings are. */
+  const site = sites.find((site) => site.server === page) ?? null;
+  const rows = site?.rows ?? [];
+  /** The install folder is there and is a game folder. Only then are there versions to show. */
+  const gameFolder = rows.some((row) => row.kind === "folder" && row.ok);
+  /** The ready screen has more lines than fit at their usual height. It then draws them closer together. */
+  const tightRows = rows.length > ROWS_AT_EASE;
+  /** What is in the way of the start that was turned down, a sentence each. */
+  const listed = inTheWayOf(sites.find((site) => site.server === s.blocked?.server));
+  const inTheWay = listed.length > 0 ? listed : (s.blocked?.messages ?? []);
+  const run = site?.phase === "running" ? site.run : null;
+  const moving = run !== null && s.speed > 0;
+  /** The download speed, when there is one worth showing. */
+  const downloadSpeed = moving && run.step === "download" ? s.speed : null;
+  /** Seconds the building of the new files still needs. */
+  const remaining = moving && run.step === "rebuild" ? s.left : null;
+  /** This version of the app is too old to patch with; a newer one has to be got first. */
+  const outdated = s.app.update?.required ?? false;
+
+  return { page, site, gameFolder, tightRows, inTheWay, downloadSpeed, remaining, outdated };
+}
+
+/**
+ * Takes in what the backend says of a client's page. It says so whenever something has
+ * changed, and counts what it says: what comes with a count that is not higher is older or
+ * the same, and is dropped.
+ */
+function heard(site: SiteView) {
+  const known = state.app.sites.find((other) => other.server === site.server);
+  if (known && site.rev <= known.rev) return;
+  const sites = known ? state.app.sites.map((other) => (other === known ? site : other)) : [...state.app.sites, site];
+  // Only a run that is going has a speed. There is one run at a time, whichever client's.
+  const going = sites.some((other) => other.phase === "running");
+  if (!going) {
+    speedFrom = null;
+    pace = [];
+  }
+  set({ app: { ...state.app, sites }, ...(going ? {} : { speed: 0, left: null }) });
+  settle();
+  // A dialog about what is in the way has nothing left to say once nothing is.
+  if (state.dialog === "blocked" && site.server === state.blocked?.server && inTheWayOf(site).length === 0) {
+    set({ dialog: "none" });
+  }
+  // A run that has finished has the screen to itself.
+  if (site.phase === "done" && known?.phase !== "done") set({ dialog: "none" });
+  const failure = site.run?.failure ?? null;
+  if (failure !== null && failure.id > (failuresShown.get(site.server) ?? 0)) {
+    failuresShown.set(site.server, failure.id);
+    set({ failure, dialog: "failed" });
+  }
+}
+
+/**
+ * Settles where the app opens, once every client's folder has been looked at: only then is
+ * it known whether a run was left unfinished in one. A folder that was looked at has its
+ * line on the page.
+ */
+function settle() {
+  const { sites } = state.app;
+  const looked = clientsKnown && sites.length > 0 && sites.every((site) => site.rows.length > 0);
+  if (state.page === null && looked) set({ page: opening(sites) });
+}
+
+/** Takes in what the backend says that is not of one client. */
+function heardWord(word: AppWord) {
+  wordsHeard += 1;
+  set({ app: { ...state.app, ...word } });
+}
+
+/** Takes in where the run at work says it is. Everything else on its page stays. */
+function progressed(progress: Progress) {
+  const site = state.app.sites.find((known) => known.server === progress.server);
+  if (!site?.run) return;
+  const at = Date.now();
+  // Speed is counted from the first figure of a step, which after a pause already
+  // includes what was done before.
+  const paced =
+    site.phase === "running" &&
+    (progress.step === "download" || progress.step === "rebuild") &&
+    progress.step === site.run.step;
+  if (!paced) {
+    speedFrom = null;
+    pace = [];
+  } else if (speedFrom === null && progress.total > 0) {
+    speedFrom = { at, bytes: progress.done };
+    pace = [{ at, bytes: progress.worked }];
+  }
+  heardAt = at;
+  const { percent, step, done, total, worked, activity } = progress;
+  const told = { ...site, percent, run: { ...site.run, percent, step, done, total, worked, activity } };
+  set({
+    app: { ...state.app, sites: state.app.sites.map((known) => (known === site ? told : known)) },
+    speed: paced ? state.speed : 0,
+    left: paced ? state.left : null,
+  });
+}
+
+/**
+ * Asks the backend for everything as it stands: at the start, and when the window is looked
+ * at again after a while.
+ */
+async function sync() {
+  const heardBefore = wordsHeard;
+  const { sites, ...word } = await takeSnapshot();
+  // What was said while this was on its way is as new or newer.
+  if (wordsHeard === heardBefore) set({ app: { ...state.app, ...word } });
+  sites.forEach(heard);
+  clientsKnown = true;
+  settle();
+}
+
+/** Shows that something other than a patch run went wrong. */
+function report(title: string, reason: unknown) {
+  set({ failure: { title, message: String(reason), details: [] }, dialog: "failed" });
+}
+
+/** Opens a page. Whatever dialog is open is closed with it, as by its own button. */
+export function openPage(page: Page) {
+  set({ page, dialog: "none" });
+}
+
+/** Asks the server again right away, after a check that failed. */
+export function checkAgain(server: ServerId) {
+  askAgain(server);
+}
+
+/**
+ * Starts the patch the page of `server` offers, or the patch file at `file` when one is
+ * given. The backend looks at the folder first, and says why when it begins nothing.
+ */
+export async function start(server: ServerId, file: string | null = null) {
+  try {
+    await startPatch(server, file);
+  } catch (reason) {
+    const refusal = reason as Refusal;
+    // A run is at work already: the button was pressed twice.
+    if (refusal.kind === "busy") return;
+    if (refusal.kind === "blocked") {
+      set({ blocked: { server, messages: refusal.messages }, dialog: "blocked" });
+      return;
+    }
+    // Nothing was tried and nothing failed. What is in the way is the headline itself, as
+    // it is when the ready screen says what is in the way.
+    const [title, ...rest] = refusal.messages.join("\n").split("\n");
+    set({ failure: { title, message: rest.join("\n") || null, details: [] }, dialog: "failed" });
+  }
+}
+
+/** Leaves a paused, failed or finished run and shows the ready screen again. */
+export function backToReady(server: ServerId) {
+  dismissRun(server);
+}
+
+export function pause(server: ServerId) {
+  stopPatch(server);
+}
+
+/** Uses `folder` as the install folder; `null` goes back to finding it automatically. */
+export async function switchFolder(server: ServerId, folder: string | null) {
+  try {
+    await setInstallDir(server, folder);
+  } catch (reason) {
+    report("설치 경로를 변경할 수 없습니다.", reason);
+  }
+}
+
+export async function changeFolder(server: ServerId) {
+  const folder = await pickFolder();
+  if (folder !== null) await switchFolder(server, folder);
+}
+
+export async function patchFromFile(server: ServerId) {
+  const file = await pickPatchFile();
+  if (file === null) return;
+  // A patch file replaces the game's programs. One that Windows knows was downloaded from
+  // somewhere other than Nexon is only applied after a yes.
+  const origin = await foreignOrigin(file);
+  if (origin === null) return start(server, file);
+  set({
+    question: {
+      message: "공식 다운로드 출처를 확인할 수 없습니다.\n이 파일로 패치하시겠습니까?",
+      detail: origin,
+      yes: () => start(server, file),
+    },
+    dialog: "ask",
+  });
+}
+
+/**
+ * Deletes what a run that will not be continued left in the install folder. A run that left
+ * the folder partly new is only given up after a yes: its files exist nowhere else, and
+ * without them this app cannot make the game whole again.
+ */
+export function discard(server: ServerId) {
+  if (!state.app.sites.find((site) => site.server === server)?.halfPatched) {
+    discardNow(server);
+    return;
+  }
+  set({
+    question: {
+      message: "삭제 후에는 공식 런처로 게임을 복구해야 합니다.\n이전 패치 작업을 삭제하시겠습니까?",
+      detail: "",
+      yes: () => discardNow(server),
+    },
+    dialog: "ask",
+  });
+}
+
+async function discardNow(server: ServerId) {
+  try {
+    await discardLeftovers(server);
+  } catch (reason) {
+    report("이전 패치 작업을 삭제할 수 없습니다.", reason);
+  }
+}
+
+/** Copies how the finished run went to the clipboard, as text a tester can send on. */
+export async function copyReport(server: ServerId) {
+  const text = await runReport(server).catch(() => null);
+  if (text === null || !(await copyText(text))) {
+    set({ failure: { title: "측정 결과를 복사할 수 없습니다.", message: null, details: [] }, dialog: "failed" });
+    return;
+  }
+  set({ copied: true });
+  setTimeout(() => set({ copied: false }), 2000);
+}
+
+export async function launch(server: ServerId) {
+  if (launching) return;
+  launching = true;
+  try {
+    await launchGame(server);
+  } catch (reason) {
+    report("게임 실행에 실패했습니다.", reason);
+  } finally {
+    launching = false;
+  }
+}
+
+export async function download(server: ServerId) {
+  try {
+    await openDownloadPage(server);
+  } catch (reason) {
+    report("다운로드 페이지를 열 수 없습니다.", reason);
+  }
+}
+
+/** Opens the page a newer version of this app is downloaded from. */
+export async function downloadUpdate() {
+  try {
+    await openReleasePage();
+  } catch (reason) {
+    report("다운로드 페이지를 열 수 없습니다.", reason);
+  }
+}
+
+/** Turns one of the settings on or off. */
+export async function setSetting(name: keyof Settings, on: boolean) {
+  const before = state.app.settings;
+  const wanted = { ...before, [name]: on };
+  set({ app: { ...state.app, settings: wanted } });
+  try {
+    await setSettings(wanted);
+  } catch (reason) {
+    set({ app: { ...state.app, settings: before } });
+    report("설정을 저장할 수 없습니다.", reason);
+  }
+}
+
+export function closeDialog() {
+  set({ dialog: "none" });
+}
+
+/** Answers the "ask" dialog with a yes. */
+export function agree() {
+  const yes = state.question?.yes;
+  set({ dialog: "none" });
+  yes?.();
+}
+
+/** Once a second while a run is going: how fast its step goes, and how long it still needs. */
+function tick() {
+  const run = state.app.sites.find((site) => site.phase === "running")?.run ?? null;
+  if (run === null || speedFrom === null) return;
+  const now = Date.now();
+  // The watch begins with the first work done: while files from an earlier run are still
+  // being checked, nothing has been said about how fast building goes.
+  const idle = pace.length > 0 && pace[0].bytes === run.worked;
+  pace = idle ? [{ at: now, bytes: run.worked }] : [...pace, { at: now, bytes: run.worked }].slice(-PACE_READINGS);
+  const watched = now - pace[0].at;
+  const done = run.worked - pace[0].bytes;
+  const left = watched >= PACE_MS && done > 0 ? Math.ceil(((run.total - run.done) * watched) / done / 1000) : null;
+  // Nothing is arriving. When it does again, the speed is measured from that moment, not
+  // averaged over the silence.
+  if (now - heardAt > QUIET_MS) {
+    speedFrom = { at: now, bytes: run.done };
+    set({ speed: 0, left });
+    return;
+  }
+  const rate = (Math.max(0, run.done - speedFrom.bytes) * 1000) / Math.max(1, now - speedFrom.at);
+  speedFrom = { at: now, bytes: run.done };
+  // Averaged with the reading before, so the figure does not twitch.
+  set({ speed: state.speed === 0 ? rate : (state.speed + rate) / 2, left });
+}
+
+/**
+ * Starts everything that runs by itself: hearing what the backend says, taking in what it
+ * knows, and the one timer. Returns what stops it all again.
+ *
+ * The backend looks at the install, asks the server, and starts what the user wants started
+ * by itself. So the screen stays current without a clock here: closing the game clears the
+ * warning, and a patch that gets published while the app is open shows up.
+ */
+export function init() {
+  const said = onSaid({ site: heard, progress: progressed, app: heardWord });
+  // What the backend knows is asked for once what it says from now on is heard, so that
+  // nothing it says in between is missed.
+  said.listening.then(sync);
+  // A window that was put away may have missed what was said meanwhile.
+  const stopLooking = onShown(sync);
+  const timer = setInterval(tick, 1000);
+
+  return () => {
+    said.stop();
+    stopLooking();
+    clearInterval(timer);
+  };
+}

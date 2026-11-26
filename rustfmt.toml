@@ -1,0 +1,4 @@
+# The width the code was written at. "Max" lets a call or a struct stay on one line as long
+# as it fits that width.
+max_width = 120
+use_small_heuristics = "Max"

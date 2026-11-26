@@ -1,0 +1,32 @@
+{
+  "name": "maple-fast-patch",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Downloads and applies MapleStory (KMS) patches.",
+  "type": "module",
+  "packageManager": "yarn@1.22.22",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "tauri": "tauri"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.5",
+    "@tauri-apps/plugin-dialog": "^2.8.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.6",
+    "@types/node": "^24",
+    "@types/react": "^19.3.2",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16"
+  }
+}

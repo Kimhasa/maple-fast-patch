@@ -1,0 +1,30 @@
+[package]
+name = "mfp-engine"
+description = "Reads and applies MapleStory patch files. No UI dependencies."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# The zlib-rs backend, chosen for how fast it inflates.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+fs4 = "1.1"
+# The platform verifier trusts what Windows trusts, which includes the certificates that
+# virus scanners and company proxies install to inspect HTTPS.
+ureq = { version = "3.5", features = ["platform-verifier", "native-tls"] }
+
+[target.'cfg(windows)'.dependencies]
+# What the standard library does not tell: the file system a folder is on, which programs
+# are running and from where, and what kind of PC this is. Asked of Windows directly, so
+# that nothing more is asked of another program than where its executable is.
+windows-sys = { version = "0.61", features = [
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tempfile = "3.27"
+

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Maple Fast Patch</title>
+  <rect x="2" y="2" width="60" height="60" rx="9" fill="#101010"/>
+  <path fill="#177AF7" d="M12 48V16H20L32 30 44 16H52V48H44V28L32 42 20 28V48Z"/>
+</svg>

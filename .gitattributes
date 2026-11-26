@@ -1,0 +1,5 @@
+# Text is kept with LF line ends everywhere, also in a checkout on Windows.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.woff binary

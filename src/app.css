@@ -1,0 +1,632 @@
+@font-face {
+  font-family: "NEXON Lv2 Gothic";
+  font-weight: 300;
+  src: url("/fonts/NEXON-Lv2-Gothic-Light.woff") format("woff");
+}
+@font-face {
+  font-family: "NEXON Lv2 Gothic";
+  font-weight: 400;
+  src: url("/fonts/NEXON-Lv2-Gothic.woff") format("woff");
+}
+@font-face {
+  font-family: "NEXON Lv2 Gothic";
+  font-weight: 700;
+  src: url("/fonts/NEXON-Lv2-Gothic-Bold.woff") format("woff");
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #101010;
+}
+* {
+  box-sizing: border-box;
+}
+
+/* Colors sampled from the old Nexon Game Manager window. */
+.app {
+  --bar: #191919;
+  --block: #272727;
+  --stage: #101010;
+  --panel: #1b1b1b;
+  --line: #2e2e2e;
+  --ink: #ffffff;
+  --sub: #868687;
+  --label: #a9a9ab;
+  --dim: #77787a;
+  --track: #2a2a2a;
+  --lime: #b1e917;
+  --lime-text: #aaea05;
+  --green: #71ab29;
+  --bad: #ff6b5e;
+  --closed: #ffb238;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--stage);
+  color: var(--ink);
+  font-family: "NEXON Lv2 Gothic", "Malgun Gothic", "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color-scheme: dark;
+  user-select: none;
+  cursor: default;
+}
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+/* Keyboard focus is shown inside the button, where the window edge cannot clip it. */
+button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -4px;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  height: 38px;
+  padding: 0 20px;
+  background: var(--bar);
+  border-bottom: 1px solid var(--line);
+}
+.logo {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 4px;
+}
+.side {
+  margin-left: auto;
+  display: flex;
+  gap: 0;
+  margin-right: -12px;
+  align-items: center;
+  color: var(--sub);
+  font-size: 16px;
+}
+.side button {
+  width: 40px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+}
+.side button:hover {
+  color: var(--ink);
+}
+/* Word of a newer version of this app sits at the other end of the bar from the window's own
+   buttons. */
+.side.lead {
+  margin: 0 auto 0 0;
+}
+
+/* Under the bar: the way from page to page at the left, and the page beside it. */
+.frame {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.sidebar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 88px;
+  padding: 16px 0 12px;
+  background: var(--bar);
+  border-right: 1px solid var(--line);
+}
+/* A page's item: its mark above what it is called. The one that is open is white, with a
+   green bar at the window's edge. */
+.nav {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 66px;
+  color: var(--sub);
+  font-size: 14px;
+  transition:
+    background-color 0.12s,
+    color 0.12s;
+}
+.nav > .icon {
+  width: 22px;
+  height: 22px;
+}
+.nav:hover {
+  background: #202020;
+  color: var(--ink);
+}
+.nav[aria-current="page"] {
+  background: var(--block);
+  color: var(--ink);
+  font-weight: 700;
+}
+.nav[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--lime);
+}
+/* The settings stand apart from the clients, at the foot. */
+.nav.last {
+  margin-top: auto;
+}
+/* A client that another's run keeps from starting has a lock at its corner. */
+.nav .lock {
+  position: absolute;
+  top: 13px;
+  right: 14px;
+  display: flex;
+}
+.nav .lock .icon {
+  width: 12px;
+  height: 12px;
+}
+/* A run that is going on while another page is open: the line of its own page, in small. */
+.nav .going {
+  position: absolute;
+  inset: auto 22px 5px;
+  height: 2px;
+  background: var(--track);
+}
+.nav .going b {
+  display: block;
+  height: 100%;
+  background: var(--lime);
+  transition: width 0.2s linear;
+}
+.content {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 44px 48px 34px;
+}
+h1 {
+  font-size: 42px;
+  line-height: 1.2;
+  margin: 0 0 4px;
+}
+.ver {
+  font-size: 22px;
+  color: var(--label);
+  margin: 0;
+}
+.ver b {
+  color: var(--ink);
+}
+/* Whether the game can be played is said in words, and the words carry the colour. */
+.ver b.open {
+  color: var(--lime-text);
+}
+.ver b.closed {
+  color: var(--closed);
+}
+.rows {
+  margin-top: auto;
+}
+.rows div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  min-height: 44px;
+  padding: 5px 0;
+}
+/* Five lines fit under the version lines at that height. With more of them (something is in
+   the way on top of what a run left) they move closer together, so that the last one still
+   ends above the stage's lower padding: seven of them take 224px of the 238px there are. */
+.rows.tight div {
+  min-height: 32px;
+  padding: 2px 0;
+}
+.rows.tight .mini,
+.rows.tight b.path .clip {
+  height: 28px;
+}
+.rows.tight b.path .clip {
+  line-height: 26px;
+}
+.rows span {
+  color: var(--sub);
+}
+.rows b {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-weight: 400;
+  word-break: break-all;
+  text-align: right;
+}
+.rows .check {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--ink);
+  flex: none;
+  white-space: nowrap;
+}
+/* The folder stands in a field of its own, with what can be done about it beside the field. A
+   long path stays on one line and is cut short; the whole of it is in the tooltip. */
+.rows b.path {
+  flex: 1;
+  min-width: 0;
+}
+.rows .clip {
+  color: inherit;
+}
+.rows b.path .clip {
+  flex: 0 1 460px;
+  min-width: 0;
+  height: 34px;
+  padding: 0 12px;
+  line-height: 32px;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rows .check.ok svg {
+  color: var(--lime-text);
+}
+.rows .check.bad svg {
+  color: var(--bad);
+}
+/* The small buttons beside a value: what can be done with it. */
+.mini {
+  flex: none;
+  height: 34px;
+  margin-left: 10px;
+  padding: 0 14px;
+  background: var(--block);
+  /* Its own colour: beside a value that failed it would otherwise turn red with it. */
+  color: var(--ink);
+  font-size: 14px;
+  white-space: nowrap;
+  transition: background-color 0.12s;
+}
+.mini:hover:not(:disabled) {
+  background: #343434;
+}
+.mini:active:not(:disabled) {
+  background: #202020;
+}
+/* Word of a newer version of this app is a button of this kind in the bar, and not one of
+   the bar's icons. */
+.side .mini {
+  display: block;
+  width: auto;
+  height: 24px;
+  margin-left: 0;
+  color: var(--ink);
+}
+.ok {
+  color: var(--lime-text);
+}
+.bad {
+  color: var(--bad);
+}
+
+/* What a run is working on, the way the game's own patcher names it: one line above the bar. */
+.activity {
+  margin: auto 0 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.line {
+  flex: none;
+  height: 6px;
+  background: var(--track);
+}
+.line i {
+  display: block;
+  height: 100%;
+  background: var(--lime);
+  transition: width 0.2s linear;
+}
+
+.foot {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  height: 88px;
+  background: var(--bar);
+}
+.st {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  /* The figure, the status and the sizes on the right all sit on the footer's middle line. */
+  align-items: center;
+  gap: 16px;
+  padding-left: 48px;
+  align-self: center;
+}
+.st b {
+  font-size: 44px;
+  line-height: 1;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.st span {
+  color: var(--sub);
+  font-size: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.st span.bad {
+  color: var(--bad);
+}
+/* Where there is no figure to show, a dash stands in its place, and stands back. */
+.st b.none {
+  color: var(--sub);
+}
+/* The spinner sits on the status text's own line, so the two share one centre. */
+.st .status {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.spin {
+  display: inline-flex;
+  font-size: 0.9em;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.play {
+  width: 0.8em;
+  height: 0.8em;
+  margin-right: 0.45em;
+  vertical-align: -0.06em;
+  fill: currentColor;
+}
+.sz {
+  align-self: center;
+  padding: 0 36px;
+  font-size: 18px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.sz .rate {
+  color: var(--sub);
+  margin-right: 22px;
+}
+.sz i {
+  font-style: normal;
+  color: var(--dim);
+  margin: 0 8px;
+}
+.sz em {
+  font-style: normal;
+  color: var(--lime-text);
+}
+.act {
+  width: 240px;
+  flex: none;
+  background: var(--block);
+  font-size: 20px;
+  font-weight: 700;
+}
+.act.go {
+  background: var(--green);
+  color: #fff;
+}
+/* Buttons answer the pointer: lighter under it, darker while pressed. */
+.act,
+.primary {
+  transition: background-color 0.12s;
+}
+.act:hover:not(:disabled) {
+  background: #343434;
+}
+.act:active:not(:disabled) {
+  background: #202020;
+}
+.act.go:hover:not(:disabled),
+.primary:hover {
+  background: #82c132;
+}
+.act.go:active:not(:disabled),
+.primary:active {
+  background: #5f9321;
+}
+
+/* A dialog covers the page it is over, down to the progress line of a client's page. The bar
+   and the sidebar stay as they are. */
+.dim {
+  position: absolute;
+  inset: 0 0 94px 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.dim.whole {
+  inset: 0;
+}
+.dlg {
+  width: min(520px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.hd {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--sub);
+}
+.hd b {
+  letter-spacing: 3px;
+  font-size: 13px;
+  color: var(--ink);
+}
+/* A dialog stays within the page it is over. What it says scrolls if it is ever longer. */
+.bd {
+  padding: 34px 40px 36px;
+  max-height: 388px;
+  overflow-y: auto;
+}
+.bd p {
+  margin: 0;
+  /* A message of two sentences has each on its own line. */
+  white-space: pre-line;
+}
+.why {
+  color: var(--sub);
+  margin-top: 2px;
+}
+.primary {
+  display: block;
+  margin: 22px auto 0;
+  padding: 14px 44px;
+  background: var(--green);
+  color: #fff;
+  font-weight: 700;
+}
+/* A question has two answers side by side; the one that changes nothing is the quiet one. */
+.pair {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+.pair .primary {
+  margin: 22px 0 0;
+}
+.primary.second {
+  background: var(--block);
+}
+.primary.second:hover {
+  background: #343434;
+}
+.primary.second:active {
+  background: #202020;
+}
+/* The settings: a page of their own, in groups with a short heading each. */
+.settings {
+  flex: 1;
+  min-height: 0;
+  padding: 34px 48px;
+}
+.settings h1 {
+  margin-bottom: 24px;
+  font-size: 38px;
+}
+.settings section + section {
+  margin-top: 22px;
+}
+.settings h2 {
+  margin: 0 0 5px;
+  color: var(--sub);
+  font-size: 15px;
+  font-weight: 700;
+}
+/* A setting: what it is on the left, the switch that turns it on or off on the right. The
+   whole line takes the click. */
+.set {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 48px;
+  border-bottom: 1px solid var(--line);
+  font-size: 18px;
+  cursor: pointer;
+}
+/* A round switch: the knob slides to the right and the track turns green when it is on. */
+.switch {
+  flex: none;
+  width: 46px;
+  height: 26px;
+  padding: 3px;
+  border-radius: 13px;
+  background: var(--block);
+  transition: background-color 0.12s;
+}
+.switch:focus-visible {
+  outline-offset: 2px;
+}
+.switch i {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--sub);
+  transition:
+    transform 0.12s,
+    background-color 0.12s;
+}
+.switch.on {
+  background: var(--green);
+}
+.switch.on i {
+  background: #fff;
+  transform: translateX(20px);
+}
+.detail {
+  font-size: 13px;
+  word-break: break-all;
+  user-select: text;
+}
+
+/* Line icons: drawn with the text colour, sized with the text. */
+.icon {
+  width: 1.15em;
+  height: 1.15em;
+  flex: none;
+  vertical-align: -0.2em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* When the server was last asked, after the newest version; when a maintenance is to end. */
+.ver .at {
+  margin-left: 14px;
+  font-size: 14px;
+  color: var(--dim);
+}
