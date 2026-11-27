@@ -23,10 +23,11 @@
 - **패치 후 게임 자동 실행**: 본섭 패치 완료 및 접속 가능 확인 시 게임 자동 실행
 - **본섭·테섭**: 서버별 관리 및 테섭 첫 패치 수동 시작
 - **오래된 버전 지원**: 여러 버전 뒤처진 클라이언트도 최신 버전까지 패치
+- **PC 검사**: PC 종류, 패치 가능 여부, 재부팅 후 패치 유지 여부 확인 및 게임 파일 검사
 
 ## 다운로드
 
-- **설치 파일**: 공개 후 [GitHub Releases](https://github.com/Kimhasa/maple-fast-patch/releases)에서 다운로드
+- **설치 파일**: [GitHub Releases](https://github.com/Kimhasa/maple-fast-patch/releases)에서 다운로드
 - **지원 환경**: Windows 10(64비트) 이상
 - **코드 서명**: 서명 없음, ‘Windows의 PC 보호’가 표시되면 ‘추가 정보’ → ‘실행’
 
