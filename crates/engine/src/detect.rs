@@ -11,39 +11,36 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::SystemTime;
 
-use crate::container::PatchFile;
+use crate::container::HEADER_LEN;
 use crate::download;
 use crate::error::{Error, Result};
-use crate::plan;
+use crate::plan::{self, Start};
 use crate::stage;
 
 /// The table sits at the very start; these sizes are tried in turn until it is complete.
 const PREFIX_SIZES: [u64; 3] = [256 << 10, 2 << 20, 16 << 20];
 
 /// Fetches the original-file checksums of a patch file on the server. `None` when the patch
-/// has no such table. `scratch` is a folder for a small temporary file.
-pub fn remote_originals(url: &str, scratch: &Path) -> Result<Option<BTreeMap<String, u32>>> {
-    fs::create_dir_all(scratch).map_err(|e| Error::file("create", scratch, e))?;
-    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let temp = scratch.join(format!("peek-{}-{serial}.tmp", std::process::id()));
-    let result = peek(url, &temp);
-    let _ = fs::remove_file(&temp);
-    result
-}
-
-fn peek(url: &str, temp: &Path) -> Result<Option<BTreeMap<String, u32>>> {
-    let mut found = None;
+/// has no such table.
+///
+/// The start of the file is read in memory, and nothing is written to this PC for it. A
+/// longer piece is only asked for while the one at hand ends inside the table: a start
+/// that shows there is none is not mended by more of the file.
+pub fn remote_originals(url: &str) -> Result<Option<BTreeMap<String, u32>>> {
     for size in PREFIX_SIZES {
         let bytes = download::fetch_prefix(url, size)?;
         let whole_file = (bytes.len() as u64) < size;
-        fs::write(temp, &bytes).map_err(|e| Error::file("write", temp, e))?;
-        found = PatchFile::open(temp).and_then(|patch| plan::originals_of(&patch))?;
-        if found.is_some() || whole_file {
-            break;
+        match plan::read_start(&bytes)? {
+            Start::Table(originals) => return Ok(Some(originals)),
+            Start::NoTable => break,
+            // All of the file, and less than the header of a patch file.
+            Start::CutOff if (bytes.len() as u64) < HEADER_LEN => return Err(Error::NotAPatchFile),
+            // All of the file, and its table still has no end.
+            Start::CutOff if whole_file => break,
+            Start::CutOff => {}
         }
     }
-    Ok(found)
+    Ok(None)
 }
 
 /// Checksums of install files, remembered so a file is only read again after it changed.

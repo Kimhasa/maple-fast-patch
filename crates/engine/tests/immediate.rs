@@ -50,7 +50,8 @@ fn run_on_drive(
     run_on_disk(&LIVE, options, &Disk { free: &free, slack: 0, file_system }, stop, on_event)
 }
 
-/// A run of `patch` on `install` that may go the immediate way if `immediate` says so.
+/// A run of `patch` on `install`, with the immediate way chosen if `immediate` says so and
+/// the safe way otherwise.
 fn options(install: &Path, patch: &Path, immediate: bool) -> Options {
     Options { immediate, ..support::options(install, patch) }
 }
@@ -382,9 +383,9 @@ fn pausing_at_any_moment_leaves_every_file_whole_and_the_run_can_go_on() {
                 world.assert_untouched(&what);
             }
 
-            // Going on without the immediate way allowed. A half-patched install goes on
-            // that way all the same. One that nothing was placed in is refused for want
-            // of room, as it always was, and is patched once the way is allowed again.
+            // Going on with the safe way chosen. A half-patched install goes on the
+            // immediate way all the same. One that nothing was placed in is refused for want
+            // of room, and is patched once the immediate way is chosen again.
             match run_tight(&patch(false), &drive, &GO, &mut |event| note_placed(&mut placed, event)) {
                 Ok(outcome) => assert_eq!(outcome.immediate, marked, "{what}, continued"),
                 Err(Error::Blocked(problems))
@@ -393,7 +394,7 @@ fn pausing_at_any_moment_leaves_every_file_whole_and_the_run_can_go_on() {
                     world.assert_untouched(&format!("{what}, refused"));
                     assert!(!half_patched(&world.install), "{what}, refused");
                     run_tight(&patch(true), &drive, &GO, &mut |event| note_placed(&mut placed, event))
-                        .unwrap_or_else(|e| panic!("{what}, allowed again: {e}"));
+                        .unwrap_or_else(|e| panic!("{what}, chosen again: {e}"));
                 }
                 Err(err) => panic!("{what}, continued: {err}"),
             }
@@ -490,7 +491,7 @@ fn apply_cut_off_at_any_moment_keeps_what_was_placed_and_the_next_run_finishes()
             assert_eq!(half_patched(&world.install), early > 0, "{what}, undone");
 
             // The next run finishes it, the immediate way if the install is half patched,
-            // whether or not that way is allowed.
+            // whichever way is chosen.
             let outcome = run(&options(&world.install, &world.patch, fuse % 2 == 0), &GO, &mut |_| {})
                 .unwrap_or_else(|e| panic!("{what}, next run: {e}"));
             assert_eq!(outcome.immediate, early > 0, "{what}, next run");
@@ -695,7 +696,7 @@ fn immediate_way_stays_within_its_room_and_refuses_a_drive_that_has_less() {
     for (layout, seed) in [(Layout::Table, 7), (Layout::PerEntry, 13)] {
         let what = format!("{layout:?} seed {seed}");
         let world = World::random(seed, layout);
-        let allowed = options(&world.install, &world.patch, true);
+        let chosen = options(&world.install, &world.patch, true);
         let (patch, plan, checked) = look(&world.install, &world.patch);
         let room = immediate::space_needed(&plan, &checked, &BTreeSet::new(), &world.install);
         let to_build = stage::bytes_to_build(&plan, &checked, &Dirs::new(&world.install));
@@ -706,7 +707,7 @@ fn immediate_way_stays_within_its_room_and_refuses_a_drive_that_has_less() {
         // anything is built or marked.
         let short = Drive { size: tree_size(&world.install) + needed - 1, install: world.install.clone() };
         let mut space = Vec::new();
-        let err = run_tight(&allowed, &short, &GO, &mut |event| {
+        let err = run_tight(&chosen, &short, &GO, &mut |event| {
             if let Event::Space { needed, available } = event {
                 space.push((needed, available));
             }
@@ -753,7 +754,7 @@ fn immediate_way_stays_within_its_room_and_refuses_a_drive_that_has_less() {
         let drive = Drive::with_room(&world.install, room);
         let before = tree_size(&world.install);
         let mut most = 0;
-        let outcome = run_tight(&allowed, &drive, &GO, &mut |_| {
+        let outcome = run_tight(&chosen, &drive, &GO, &mut |_| {
             let size = settled_tree_size(&world.install, drive.limit());
             assert!(size <= drive.limit(), "{what}: the install folder grew to {size}, past {}", drive.limit());
             most = most.max(size);
@@ -766,7 +767,7 @@ fn immediate_way_stays_within_its_room_and_refuses_a_drive_that_has_less() {
 }
 
 #[test]
-fn safe_way_on_a_tight_drive_is_refused_for_room_as_it_always_was() {
+fn safe_way_on_a_tight_drive_is_refused_for_room() {
     let world = World::random(13, Layout::PerEntry);
     let (_, plan, checked) = look(&world.install, &world.patch);
     let to_build = stage::bytes_to_build(&plan, &checked, &Dirs::new(&world.install));
@@ -784,7 +785,7 @@ fn safe_way_on_a_tight_drive_is_refused_for_room_as_it_always_was() {
 
 #[test]
 fn originals_check_passes_over_what_built_files_were_built_from_and_nothing_else() {
-    // With nothing named as built, it is the check it always was.
+    // With nothing named as built, it is the plain check of the originals.
     let nothing = BTreeSet::new();
     let world = World::random(19, Layout::Table);
     let (_, plan, checked) = look(&world.install, &world.patch);
@@ -882,10 +883,10 @@ fn half_patched_install_takes_no_other_patch_and_loses_nothing_to_one() {
         work_before.keys()
     );
 
-    // Another patch, whichever way it is allowed to go: refused, and nothing is touched.
+    // Another patch, whichever way is chosen for it: refused, and nothing is touched.
     let other = World::random(12, Layout::PerEntry);
-    for allowed in [false, true] {
-        let err = run(&options(&world.install, &other.patch, allowed), &GO, &mut |_| {}).unwrap_err();
+    for chosen in [false, true] {
+        let err = run(&options(&world.install, &other.patch, chosen), &GO, &mut |_| {}).unwrap_err();
         let expected = [Problem::LeftoverWork { dir: dirs.work() }];
         assert!(matches!(&err, Error::Blocked(problems) if problems[..] == expected), "unexpected error: {err}");
         assert!(files_under(&dirs.work()) == work_before, "the work folder was changed");
@@ -985,8 +986,8 @@ fn file_held_open_by_another_program_stops_the_run_and_releasing_it_lets_the_run
     let held = fs::OpenOptions::new().read(true).share_mode(1).open(&held_path).unwrap();
 
     let drive = Drive::with_room(&world.install, least_room(&world.install, &world.patch));
-    let allowed = options(&world.install, &world.patch, true);
-    let err = run_tight(&allowed, &drive, &GO, &mut |_| {}).unwrap_err();
+    let chosen = options(&world.install, &world.patch, true);
+    let err = run_tight(&chosen, &drive, &GO, &mut |_| {}).unwrap_err();
     let in_use = match &err {
         Error::Blocked(problems) => {
             matches!(&problems[..], [Problem::FilesLocked { files }] if files[..] == [held_path.clone()])
@@ -999,7 +1000,7 @@ fn file_held_open_by_another_program_stops_the_run_and_releasing_it_lets_the_run
     assert_whole(&world.install, &world.before, &world.after, &plan, "held open");
 
     drop(held);
-    run_tight(&allowed, &drive, &GO, &mut |_| {}).unwrap();
+    run_tight(&chosen, &drive, &GO, &mut |_| {}).unwrap();
     world.assert_patched("released");
 }
 
@@ -1130,13 +1131,13 @@ fn trial_comes_before_the_first_file_is_replaced_and_not_again_on_the_way_on() {
     let (_, plan, checked) = look(&world.install, &world.patch);
     let to_try = stage::bytes_to_build(&plan, &checked, &Dirs::new(&world.install));
     let drive = Drive::tight(&world.install, &world.patch);
-    let allowed = options(&world.install, &world.patch, true);
+    let chosen = options(&world.install, &world.patch, true);
 
     // Paused in the middle of the trial: it has written nothing anywhere.
     let untouched = files_under(&world.install);
     let stop = AtomicBool::new(false);
     let mut trying = false;
-    let paused = run_tight(&allowed, &drive, &stop, &mut |event| match event {
+    let paused = run_tight(&chosen, &drive, &stop, &mut |event| match event {
         Event::Stage(stage) => trying = stage == Stage::Trial,
         Event::Progress { .. } if trying => stop.store(true, Ordering::Relaxed),
         _ => {}
@@ -1149,7 +1150,7 @@ fn trial_comes_before_the_first_file_is_replaced_and_not_again_on_the_way_on() {
     let stop = AtomicBool::new(false);
     let mut stages = Vec::new();
     let mut tried = 0;
-    let paused = run_tight(&allowed, &drive, &stop, &mut |event| {
+    let paused = run_tight(&chosen, &drive, &stop, &mut |event| {
         match event {
             Event::Stage(stage) => stages.push(stage),
             Event::Progress { done, total } if stages.last() == Some(&Stage::Trial) => {
@@ -1167,7 +1168,7 @@ fn trial_comes_before_the_first_file_is_replaced_and_not_again_on_the_way_on() {
 
     // A folder that is half patched is not tried again: there is no way back from there.
     let mut stages = Vec::new();
-    run_tight(&allowed, &drive, &GO, &mut |event| {
+    run_tight(&chosen, &drive, &GO, &mut |event| {
         if let Event::Stage(stage) = event {
             stages.push(stage);
         }

@@ -116,14 +116,11 @@ impl PatchFile {
         // The payload normally starts with a two-byte zlib header. If those bytes do not form
         // one, they are data.
         let mut zlib = [0u8; 2];
-        let has_header = match payload.read_exact(&mut zlib) {
-            Ok(()) => zlib[0] == 0x78 && (u16::from(zlib[0]) << 8 | u16::from(zlib[1])) % 31 == 0,
-            Err(_) => false,
-        };
+        let has_header = payload.read_exact(&mut zlib).is_ok() && is_zlib_header(zlib);
         if !has_header {
             payload = self.payload()?;
         }
-        Ok(PatchStream { inner: BufReader::with_capacity(1 << 16, DeflateDecoder::new(payload)), position: 0 })
+        Ok(PatchStream::over(payload))
     }
 
     fn payload(&self) -> Result<io::Take<BufReader<File>>> {
@@ -137,6 +134,12 @@ impl PatchFile {
 /// The id of the patch block that carries `stored_crc` and is `block_len` bytes long.
 fn id_of(stored_crc: u32, block_len: u64) -> String {
     format!("{stored_crc:08x}-{block_len}")
+}
+
+/// Whether the two bytes a payload begins with are the header zlib puts in front of
+/// compressed data.
+fn is_zlib_header(start: [u8; 2]) -> bool {
+    start[0] == 0x78 && (u16::from(start[0]) << 8 | u16::from(start[1])) % 31 == 0
 }
 
 /// Reads the trailer that marks an embedded patch block: `(offset, length)` of the block.
@@ -170,15 +173,52 @@ fn block_before(file_len: u64, trailer_len: u64, block_len: u64, notice_len: u64
 }
 
 /// The decompressed contents of a patch file, read front to back.
-pub struct PatchStream {
-    inner: BufReader<DeflateDecoder<io::Take<BufReader<File>>>>,
+///
+/// The compressed bytes come out of the patch file itself, or, where only the beginning of
+/// one is at hand, out of memory: see [`crate::plan::read_start`].
+pub struct PatchStream<R = io::Take<BufReader<File>>> {
+    inner: BufReader<DeflateDecoder<R>>,
     position: u64,
+    /// See [`PatchStream::ran_out`].
+    ran_out: bool,
 }
 
-impl PatchStream {
+impl<'a> PatchStream<&'a [u8]> {
+    /// The contents of a patch file of which only the first bytes, `start`, are at hand, as
+    /// far as those bytes go. They are read where they are; nothing is written for it.
+    ///
+    /// Fails with [`Error::NotAPatchFile`] when that is not how a patch file begins. One
+    /// that sits inside an `.exe` has its header further in, as for
+    /// [`PatchFile::id_from_start`].
+    pub(crate) fn of_start(start: &'a [u8]) -> Result<PatchStream<&'a [u8]>> {
+        let payload = start.get(HEADER_LEN as usize..).filter(|_| start.starts_with(MAGIC));
+        let payload = payload.ok_or(Error::NotAPatchFile)?;
+        // As in [`PatchFile::stream`]: a zlib header is passed over, anything else is data.
+        let has_header = payload.first_chunk().is_some_and(|zlib| is_zlib_header(*zlib));
+        Ok(PatchStream::over(if has_header { &payload[2..] } else { payload }))
+    }
+}
+
+impl<R: Read> PatchStream<R> {
+    /// The contents that `payload` holds compressed, without a zlib header in front.
+    fn over(payload: R) -> PatchStream<R> {
+        PatchStream {
+            inner: BufReader::with_capacity(1 << 16, DeflateDecoder::new(payload)),
+            position: 0,
+            ran_out: false,
+        }
+    }
+
     /// Bytes read so far.
     pub fn position(&self) -> u64 {
         self.position
+    }
+
+    /// Whether [`PatchStream::read_exact`] was asked for bytes that the contents did not
+    /// give: they end before that, or cannot be decompressed that far. This is what tells
+    /// contents that are cut off from contents that are there and hold something else.
+    pub(crate) fn ran_out(&self) -> bool {
+        self.ran_out
     }
 
     /// The next byte, or `None` at the end of the contents.
@@ -198,7 +238,10 @@ impl PatchStream {
     }
 
     pub fn read_exact(&mut self, buffer: &mut [u8]) -> Result<()> {
-        self.inner.read_exact(buffer).map_err(decode_error)?;
+        if let Err(source) = self.inner.read_exact(buffer) {
+            self.ran_out = true;
+            return Err(decode_error(source));
+        }
         self.position += buffer.len() as u64;
         Ok(())
     }

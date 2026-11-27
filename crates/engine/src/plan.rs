@@ -6,10 +6,11 @@
 //! older ones store the original checksum inside each rebuild entry.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::container::{PatchFile, PatchStream};
+use crate::container::{HEADER_LEN, PatchFile, PatchStream};
 use crate::error::{Error, Result};
 use crate::preflight;
 
@@ -247,7 +248,7 @@ pub fn open_contents(patch: &PatchFile) -> Result<(PatchStream, Layout, BTreeMap
     }
 }
 
-fn read_table(stream: &mut PatchStream) -> Result<BTreeMap<String, u32>> {
+fn read_table<R: Read>(stream: &mut PatchStream<R>) -> Result<BTreeMap<String, u32>> {
     let count = stream.read_len()?;
     if count > MAX_ENTRIES as u64 {
         return Err(Error::corrupt("more original files listed than any patch has"));
@@ -265,7 +266,7 @@ fn read_table(stream: &mut PatchStream) -> Result<BTreeMap<String, u32>> {
 }
 
 /// Reads the next entry's name and header, or `None` at the end of the contents.
-pub(crate) fn read_header(stream: &mut PatchStream, layout: Layout) -> Result<Option<(String, Header)>> {
+fn read_header(stream: &mut PatchStream, layout: Layout) -> Result<Option<(String, Header)>> {
     let mut name = Vec::new();
     let kind = loop {
         match stream.next_byte()? {
@@ -439,15 +440,40 @@ pub(crate) fn folders_above(key: &str) -> impl Iterator<Item = &str> {
     key.rmatch_indices('\\').map(|(at, _)| &key[..at])
 }
 
-/// Reads only the table of original-file checksums at the front of a patch file.
+/// What the first bytes of a patch file tell of the original files it was built from.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Start {
+    /// The table of original-file checksums, whole. It may name nothing: such patches exist.
+    Table(BTreeMap<String, u32>),
+    /// The table could not be read to its end: the bytes stop before it does. More of the
+    /// file may hold the rest.
+    CutOff,
+    /// What stands where the table would be is none, however much of the file is read: a
+    /// patch file of the older layout begins with its first entry.
+    NoTable,
+}
+
+/// Reads only the table of original-file checksums at the front of a patch file, out of the
+/// first bytes of that file, in memory.
 ///
-/// Works on a file that holds just the beginning of a patch, which makes it cheap to ask
-/// "is this patch made for my install?" before downloading all of it. Returns `None` when the
-/// table cannot be read: the file is cut off inside the table, or uses the older layout.
-pub(crate) fn originals_of(patch: &PatchFile) -> Result<Option<BTreeMap<String, u32>>> {
-    match read_table(&mut patch.stream()?) {
-        Ok(originals) => Ok(Some(originals)),
-        Err(Error::CorruptPatch(_)) => Ok(None),
+/// That makes it cheap to ask "is this patch made for my install?" before downloading all
+/// of it: the beginning of the file is fetched, and nothing is written for it. The table is
+/// read the way [`open_contents`] reads it from a whole file.
+///
+/// Fails with [`Error::NotAPatchFile`] when the bytes are a header's worth and not how a
+/// patch file begins, and with [`Error::UnsafePath`] when the table names a file outside
+/// the install folder.
+pub fn read_start(bytes: &[u8]) -> Result<Start> {
+    // Before the header is there, nothing says what this is.
+    if (bytes.len() as u64) < HEADER_LEN {
+        return Ok(Start::CutOff);
+    }
+    let mut stream = PatchStream::of_start(bytes)?;
+    match read_table(&mut stream) {
+        Ok(originals) => Ok(Start::Table(originals)),
+        // Running out of bytes is the one thing that more bytes can mend.
+        Err(Error::CorruptPatch(_)) if stream.ran_out() => Ok(Start::CutOff),
+        Err(Error::CorruptPatch(_)) => Ok(Start::NoTable),
         Err(other) => Err(other),
     }
 }
@@ -536,6 +562,80 @@ mod tests {
                 "{} characters were accepted",
                 name.len()
             );
+        }
+    }
+
+    /// The beginning of a patch file that holds `contents`, compressed as a real one is.
+    fn start_of(contents: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut packed = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        packed.write_all(contents).unwrap();
+        let mut bytes = b"WzPatch\x1A".to_vec();
+        bytes.extend([0u8; 8]);
+        bytes.extend(packed.finish().unwrap());
+        bytes
+    }
+
+    /// The contents of a patch file whose table names `files`, with an entry behind the
+    /// table as in a real file.
+    fn table_of(files: &[(&str, u32)]) -> Vec<u8> {
+        let mut contents = (files.len() as i32).to_le_bytes().to_vec();
+        for (name, crc) in files {
+            contents.extend((name.len() as i32).to_le_bytes());
+            contents.extend(name.as_bytes());
+            contents.extend(crc.to_le_bytes());
+        }
+        contents.extend(b"Data\\Next.wz\x02");
+        contents
+    }
+
+    #[test]
+    fn table_is_read_from_the_first_bytes_of_a_patch_file_as_from_the_whole_file() {
+        let files: Vec<(String, u32)> = (0..400).map(|at| (format!(r"Data\Map\Map_{at:03}.wz"), at * 7919)).collect();
+        let named: Vec<(&str, u32)> = files.iter().map(|(name, crc)| (name.as_str(), *crc)).collect();
+        let bytes = start_of(&table_of(&named));
+        let Start::Table(table) = read_start(&bytes).unwrap() else { panic!("no table was read") };
+        assert_eq!(table.len(), 400);
+        assert_eq!(table[r"Data\Map\Map_007.wz"], 7 * 7919);
+
+        // The same bytes as a file on disk give the same table.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("whole.patch");
+        std::fs::write(&path, &bytes).unwrap();
+        let (_, layout, originals) = open_contents(&PatchFile::open(&path).unwrap()).unwrap();
+        assert_eq!((layout, originals), (Layout::Table, table));
+
+        // Cut off anywhere before the table ends, more bytes may mend it: before the
+        // header is whole, right behind it, and inside the table.
+        for cut in [0, 10, 16, 17, 40, bytes.len() / 2] {
+            assert_eq!(read_start(&bytes[..cut]).unwrap(), Start::CutOff, "cut at {cut}");
+        }
+        // A table that names nothing is a table too, and so is one whose compressed bytes
+        // come without the two bytes zlib puts in front.
+        assert_eq!(read_start(&start_of(&table_of(&[]))).unwrap(), Start::Table(BTreeMap::new()));
+        let mut bare = bytes[..16].to_vec();
+        bare.extend(&bytes[18..]);
+        assert!(matches!(read_start(&bare), Ok(Start::Table(table)) if table.len() == 400));
+    }
+
+    #[test]
+    fn first_bytes_without_a_table_are_told_from_those_that_are_cut_off() {
+        // The older layout begins with the name of its first entry, and no more bytes
+        // turn that into a table.
+        let older = start_of(b"Data\\Base\\Base_000.wz\x01\x00\x00\x00\x00");
+        assert_eq!(read_start(&older).unwrap(), Start::NoTable);
+        // Nor do they for a table that names a file twice.
+        assert_eq!(read_start(&start_of(&table_of(&[("a.wz", 1), ("a.wz", 2)]))).unwrap(), Start::NoTable);
+        // What does not begin as a patch file does is none, and a name that leads out of
+        // the install folder is refused as it is in a whole file.
+        assert!(matches!(read_start(&[0u8; 64]), Err(Error::NotAPatchFile)));
+        assert!(matches!(
+            read_start(b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xFF\xFF\x00\x00"),
+            Err(Error::NotAPatchFile)
+        ));
+        for name in [r"..\Windows\evil.dll", r"C:\Windows\evil.dll", r".maple-fast-patch\x", "NUL"] {
+            let bytes = start_of(&table_of(&[("MapleStory.exe", 1), (name, 2)]));
+            assert!(matches!(read_start(&bytes), Err(Error::UnsafePath(_))), "{name:?} was accepted");
         }
     }
 

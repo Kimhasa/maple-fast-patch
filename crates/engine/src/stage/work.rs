@@ -42,12 +42,6 @@ impl Dirs {
     pub fn aside(&self) -> PathBuf {
         self.work().join(ASIDE_DIR_NAME)
     }
-    /// Where applies of earlier versions moved originals to: numbered files and folders
-    /// that carry no names, which only their journal can put back. Nothing is moved here
-    /// any more.
-    pub fn backup(&self) -> PathBuf {
-        self.work().join("backup")
-    }
     /// What an attempt to put the folder back without its journal leaves behind when it
     /// finds that it cannot be done: the reason. It spares every later look the reading
     /// that it took to find out.
@@ -347,7 +341,7 @@ mod tests {
         assert_eq!(in_work(&dirs), ["download"]);
         assert_eq!(fs::read(dirs.download().join("next.patch.part")).unwrap(), b"downloaded");
 
-        // With nothing downloaded the folder goes too, as it always did.
+        // With nothing downloaded the folder goes too.
         fill(&theirs.id());
         fs::remove_dir_all(dirs.download()).unwrap();
         discard_foreign_work(&ours, &dirs).unwrap();

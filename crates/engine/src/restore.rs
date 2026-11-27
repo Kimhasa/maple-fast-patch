@@ -39,9 +39,13 @@ struct Kept {
     folder: bool,
 }
 
-/// Whether anything but empty folders lies below `dir`. Links are not followed: a link is
-/// something that lies there.
+/// Whether anything but empty folders lies below `dir`. Links are not followed: a link below
+/// `dir` is something that lies there, and a `dir` that is itself a link is not looked into
+/// and holds nothing.
 pub(crate) fn holds_files(dir: &Path) -> bool {
+    if apply::is_link(dir) {
+        return false;
+    }
     let mut folders = vec![dir.to_path_buf()];
     while let Some(folder) = folders.pop() {
         let Ok(children) = fs::read_dir(&folder) else { continue };
@@ -56,14 +60,9 @@ pub(crate) fn holds_files(dir: &Path) -> bool {
 }
 
 /// Why this install folder cannot be put back without its journal, where that is known
-/// without trying: an attempt before this one found out and left a note of it, or what was
-/// moved aside lies where earlier versions put it, numbered and without names.
+/// without trying: an attempt before this one found out and left a note of it.
 pub(crate) fn out_of_reach(dirs: &Dirs) -> Option<String> {
-    if let Ok(why) = fs::read_to_string(dirs.cannot_restore()) {
-        return Some(why);
-    }
-    let nameless = "what the apply moved aside carries no names: an earlier version moved it";
-    holds_files(&dirs.backup()).then(|| nameless.to_owned())
+    fs::read_to_string(dirs.cannot_restore()).ok()
 }
 
 /// Puts the install folder back from what the apply moved aside, and says how far that

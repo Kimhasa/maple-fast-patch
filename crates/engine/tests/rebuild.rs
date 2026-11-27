@@ -275,8 +275,8 @@ fn copy_that_runs_past_the_end_of_an_original_fails_and_leaves_nothing() {
     // A copy that needs more than its original has. If the original is the very file the
     // patch was made for, the patch is at fault, and the check of the originals says so
     // before anything is built. If the original got shorter after it was checked, it is
-    // the build that runs into its end: that has to end with a read error, as it always
-    // did; not hang, not build.
+    // the build that runs into its end: that has to end with a read error; not hang, not
+    // build.
     let size = 10_000usize;
     let bad_copies: [(usize, usize); 6] = [
         (9_000, 2_000),  // starts inside, runs past
@@ -571,8 +571,8 @@ fn files_a_killed_run_was_writing_are_removed_and_never_applied() {
     let opened = case.open();
 
     // A run of this patch that was killed: the work folder is this patch's, one file was
-    // finished, and files it was still writing lie around under every name they can have,
-    // the single name older versions used included.
+    // finished, and files it was still writing lie around under every name that is taken
+    // for one of them.
     let stop = AtomicBool::new(false);
     let mut names = Vec::new();
     let killed = stage::stage(&opened.patch, &opened.plan, &opened.checked, &opened.dirs, &stop, &mut |name, _, _| {

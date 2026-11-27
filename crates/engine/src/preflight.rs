@@ -29,8 +29,9 @@ pub struct Programs {
 /// The folder of game data that every install folder has.
 pub const DATA_DIR_NAME: &str = "Data";
 
-/// Folder inside the install folder that holds rebuilt files and the backups of replaced
-/// files. A fixed name, so a later run can find what an interrupted run left behind.
+/// Folder inside the install folder that holds the new files a run has built and what an
+/// apply has moved aside. A fixed name, so a later run can find what an interrupted run left
+/// behind.
 pub const WORK_DIR_NAME: &str = ".maple-fast-patch";
 
 /// The file beside the work folder that a run holds open for as long as it works on the
@@ -69,8 +70,8 @@ pub enum Problem {
     LeftoverWork { dir: PathBuf },
     /// An earlier run was cut off while it applied, and what that apply did cannot be
     /// undone. The journal that says how far it had come cannot be read, or is gone: a line
-    /// of it is not one this version writes, or names a place outside the install folder,
-    /// or the file is not text. And the folder could not be put back without the journal
+    /// of it is not one an apply writes, or names a place outside the install folder, or
+    /// the file is not text. And the folder could not be put back without the journal
     /// either, from what the apply had moved aside: see [`crate::run::recover`] for when
     /// that is so. Nothing may go on over such a folder. `dir` is the work folder;
     /// `detail` says what could not be read and why the folder could not be put back, for
@@ -356,10 +357,9 @@ pub(crate) fn check_inside_install(install: &Path, dirs: &[PathBuf]) -> Vec<Prob
 /// A journal that cannot be read does not make a folder one of those. Such a folder is put
 /// back from what the apply moved aside, by [`crate::run::recover`] and by the start of a
 /// run, and whether that works shows only when it is tried. So this reports it once it was
-/// tried and could not be done, and before that only where it is certain without trying:
-/// what was moved aside carries no names, because an earlier version moved it. A folder
-/// that has not been tried yet is reported as work that is left, like one whose journal can
-/// be read. Whoever wants the answer to be final asks [`crate::run::recover`] first.
+/// tried and could not be done. A folder that has not been tried yet is reported as work
+/// that is left, like one whose journal can be read. Whoever wants the answer to be final
+/// asks [`crate::run::recover`] first.
 ///
 /// Nothing is changed by looking.
 pub fn check_leftovers(install_dir: &Path) -> Vec<Problem> {

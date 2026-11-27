@@ -256,12 +256,13 @@ fn apply_interrupted_by_a_crash_is_undone_on_the_next_start() {
     let fx = fixture(Layout::Table);
     let dirs = Dirs::new(&fx.install);
 
-    // The state a crash leaves behind: one original moved to the backup folder, its
-    // replacement in place, and the journal saying so.
-    fs::create_dir_all(dirs.backup()).unwrap();
-    fs::rename(fx.install.join("Data/Skill/Skill_000.wz"), dirs.backup().join("0")).unwrap();
+    // The state a crash leaves behind: one original moved aside, into the folder of its
+    // step and under its own name, its replacement in place, and the journal saying so.
+    let kept = dirs.aside().join("0").join("Data/Skill");
+    fs::create_dir_all(&kept).unwrap();
+    fs::rename(fx.install.join("Data/Skill/Skill_000.wz"), kept.join("Skill_000.wz")).unwrap();
     fs::write(fx.install.join("Data/Skill/Skill_000.wz"), NEW_SKILL).unwrap();
-    fs::write(dirs.work().join("applying.log"), "B\t0\tData/Skill/Skill_000.wz\n").unwrap();
+    fs::write(dirs.work().join("applying.log"), "M\t0\tData/Skill/Skill_000.wz\n").unwrap();
 
     assert_eq!(apply::recover(&dirs).unwrap(), Leftover::RolledBack);
     assert_untouched(&fx);
@@ -276,9 +277,10 @@ fn finished_apply_is_not_undone_when_only_cleanup_was_interrupted() {
     let fx = fixture(Layout::Table);
     run(&options(&fx), &GO, &mut |_| {}).unwrap();
 
+    // A journal that would take the new file out again if it were obeyed.
     let dirs = Dirs::new(&fx.install);
     fs::create_dir_all(dirs.work()).unwrap();
-    fs::write(dirs.work().join("applying.log"), "B\tData\\Skill\\Skill_000.wz\n").unwrap();
+    fs::write(dirs.work().join("applying.log"), "N\tData\\String\\String_000.wz\n").unwrap();
     fs::write(dirs.work().join("committed"), b"").unwrap();
 
     assert_eq!(apply::recover(&dirs).unwrap(), Leftover::None);
@@ -402,11 +404,12 @@ fn run_restores_an_install_whose_executable_was_moved_aside() {
     let fx = fixture(Layout::Table);
     let dirs = Dirs::new(&fx.install);
 
-    // A crash right after the executable was moved to the backup folder: the install folder
-    // no longer looks like an install.
-    fs::create_dir_all(dirs.backup()).unwrap();
-    fs::rename(fx.install.join("MapleStory.exe"), dirs.backup().join("0")).unwrap();
-    fs::write(dirs.work().join("applying.log"), "B\t0\tMapleStory.exe\n").unwrap();
+    // A crash right after the executable was moved aside: the install folder no longer
+    // looks like an install.
+    let kept = dirs.aside().join("0");
+    fs::create_dir_all(&kept).unwrap();
+    fs::rename(fx.install.join("MapleStory.exe"), kept.join("MapleStory.exe")).unwrap();
+    fs::write(dirs.work().join("applying.log"), "M\t0\tMapleStory.exe\n").unwrap();
 
     let mut restored = false;
     run(&options(&fx), &GO, &mut |event| restored |= matches!(event, Event::Restored(Leftover::RolledBack))).unwrap();
@@ -419,10 +422,11 @@ fn run_restores_an_install_whose_executable_was_moved_aside() {
 fn journal_line_cut_off_while_being_written_is_ignored() {
     let fx = fixture(Layout::Table);
     let dirs = Dirs::new(&fx.install);
-    fs::create_dir_all(dirs.backup()).unwrap();
-    fs::rename(fx.install.join("Data/Obsolete.wz"), dirs.backup().join("0")).unwrap();
+    let kept = dirs.aside().join("0").join("Data");
+    fs::create_dir_all(&kept).unwrap();
+    fs::rename(fx.install.join("Data/Obsolete.wz"), kept.join("Obsolete.wz")).unwrap();
     // The second line has no line break: the app died while writing it.
-    fs::write(dirs.work().join("applying.log"), "B\t0\tData/Obsolete.wz\nB\t1\tData/Sk").unwrap();
+    fs::write(dirs.work().join("applying.log"), "M\t0\tData/Obsolete.wz\nM\t1\tData/Sk").unwrap();
 
     assert_eq!(apply::recover(&dirs).unwrap(), Leftover::RolledBack);
     assert_untouched(&fx);
@@ -459,7 +463,7 @@ fn patch_naming_one_file_twice_is_refused() {
     let err = run(&options(&fx), &GO, &mut |_| {}).unwrap_err();
     assert!(matches!(&err, Error::UnknownForm(detail) if detail.contains("appears twice")), "unexpected error: {err}");
     assert_untouched(&fx);
-    // Read without a run, the same file is refused the way it always was.
+    // Read without a run, the same file is refused as a patch that cannot be read.
     let patch = PatchFile::open(&fx.patch).unwrap();
     patch.verify(&GO, |_| {}).unwrap();
     assert!(matches!(plan::scan(&patch, &GO), Err(Error::CorruptPatch(_))));
@@ -726,7 +730,7 @@ fn run_without_room_for_what_is_certain_stops_before_the_game_files_are_read() {
     assert_untouched(&fx);
     assert!(!fx.install.join(".maple-fast-patch").exists());
 
-    // One byte more and the run goes through, saying once what it needs, as it always did.
+    // One byte more and the run goes through, saying once what it needs.
     let mut space = Vec::new();
     let outcome = run_on(&LIVE, &options(&fx), &drive_with(needed), &GO, &mut |event| {
         if let Event::Space { needed, available } = event {
@@ -770,14 +774,16 @@ fn forged_journal_cannot_move_files_out_of_the_install_folder() {
     let outside = fx.install.parent().unwrap().join("Elsewhere");
     fs::create_dir_all(&outside).unwrap();
     // Someone with access to the install folder plants a link that leads out of it, a file
-    // in the backup folder, and a journal that says the file belongs behind the link.
+    // where an apply keeps what it moves aside, and a journal that says the file belongs
+    // behind the link.
     let link = fx.install.join("j");
     let made =
         std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&link).arg(&outside).output().unwrap();
     assert!(made.status.success(), "could not make the link: {}", String::from_utf8_lossy(&made.stderr));
-    fs::create_dir_all(dirs.backup()).unwrap();
-    fs::write(dirs.backup().join("0"), b"planted").unwrap();
-    fs::write(dirs.work().join("applying.log"), "B\t0\tj/planted.exe\n").unwrap();
+    let kept = dirs.aside().join("0").join("j");
+    fs::create_dir_all(&kept).unwrap();
+    fs::write(kept.join("planted.exe"), b"planted").unwrap();
+    fs::write(dirs.work().join("applying.log"), "M\t0\tj/planted.exe\n").unwrap();
 
     let err = apply::recover(&dirs).unwrap_err();
     assert!(matches!(err, Error::Blocked(_)), "unexpected error: {err}");
@@ -863,9 +869,10 @@ fn folder_with_an_apply_that_was_cut_off_is_restored_before_it_is_judged() {
     let world = World::random_for(&TEST, 34, Layout::Table);
     let dirs = Dirs::new(&world.install);
     let moved = world.before.keys().find(|name| name.starts_with("Data")).unwrap();
-    fs::create_dir_all(dirs.backup()).unwrap();
-    fs::rename(support::on_disk(&world.install, moved), dirs.backup().join("0")).unwrap();
-    fs::write(dirs.work().join("applying.log"), format!("B\t0\t{}\n", moved.replace('\\', "/"))).unwrap();
+    let kept = support::on_disk(&dirs.aside().join("0"), moved);
+    fs::create_dir_all(kept.parent().unwrap()).unwrap();
+    fs::rename(support::on_disk(&world.install, moved), &kept).unwrap();
+    fs::write(dirs.work().join("applying.log"), format!("M\t0\t{}\n", moved.replace('\\', "/"))).unwrap();
 
     // Asked about as the live client's, it is short of that client's program. That alone does
     // not say whose folder it is: the program could be among what the apply had moved. So

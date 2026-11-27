@@ -1,8 +1,8 @@
 //! Moves the built files into the install folder, and puts everything back if that fails.
 //!
-//! Nothing is deleted while applying: whatever a new file replaces is moved into the backup
-//! folder first. Each step is written to a journal before it happens, so a run that dies
-//! halfway (crash, power loss) can be undone the next time the app starts.
+//! Nothing is deleted while applying: whatever a new file replaces is moved aside first,
+//! into the work folder. Each step is written to a journal before it happens, so a run that
+//! dies halfway (crash, power loss) can be undone the next time the app starts.
 
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
@@ -21,12 +21,9 @@ use crate::stage::{self, Checked, Dirs};
 /// `M <step> <name>`: what was at `name` is being moved aside, to `aside\<step>\<name>`.
 /// `N <name>`: a new file is being placed at `name`, where nothing was.
 /// `D <name>`: the folder `name` is being created.
-/// `B <slot> <name>`: what earlier versions wrote where this one writes `M`. They moved what
-/// was at `name` to `backup\<slot>`, a place that does not say where its contents came from.
-/// Read, so that an apply those versions were cut off in can still be undone; never written.
-/// A version that only knows `B` cannot read an `M`, and so leaves such a journal alone.
+///
+/// A line of any other kind makes the journal one that cannot be read: see [`read_journal`].
 const MOVED_ASIDE: &str = "M";
-const BACKED_UP: &str = "B";
 const PLACED_NEW: &str = "N";
 const MADE_DIR: &str = "D";
 
@@ -66,8 +63,8 @@ pub enum Step<'a> {
 }
 
 /// Whether an apply was cut off in this install folder and is still to be undone. Until it
-/// is, files of the folder lie among the backups, and the folder may be short of the very
-/// things an install folder is known by.
+/// is, files of the folder lie where the apply moved them aside, and the folder may be short
+/// of the very things an install folder is known by.
 ///
 /// The journal says so, and so does anything that still lies where an apply moves things
 /// aside: a journal can be lost. So does the note of an attempt to put the folder back that
@@ -209,7 +206,7 @@ pub fn restore_then_crash(dirs: &Dirs, patch: Option<&Path>, fuse: usize) -> Res
 /// could not be removed at the time. It has to go before this apply moves anything aside:
 /// what lies there is taken for this apply's own if it is cut off.
 fn begin_fresh(dirs: &Dirs) -> Result<()> {
-    for left in [dirs.aside(), dirs.backup(), dirs.committed()] {
+    for left in [dirs.aside(), dirs.committed()] {
         stage::remove(&left)?;
     }
     Ok(())
@@ -266,7 +263,7 @@ pub(crate) fn guard_work(dirs: &Dirs) -> Result<()> {
     if is_link(&work) {
         return outside(work);
     }
-    let (aside, backup) = (dirs.aside(), dirs.backup());
+    let aside = dirs.aside();
     let mut folders = vec![work];
     while let Some(folder) = folders.pop() {
         // What cannot be listed is not there, or is no folder.
@@ -275,12 +272,11 @@ pub(crate) fn guard_work(dirs: &Dirs) -> Result<()> {
             let path = child.path();
             match child.file_type() {
                 Ok(kind) if kind.is_symlink() => return outside(path),
-                // What was moved aside is not looked into: neither the folder of a step,
-                // which the apply makes itself the moment it uses it, nor the backups of
-                // earlier versions. It is moved back as it is, or removed, without any link
-                // in it being followed, and a folder of the install that was moved aside
-                // may well hold links of its own.
-                Ok(kind) if kind.is_dir() && folder != aside && path != backup => folders.push(path),
+                // What was moved aside is not looked into: the folder of a step, which the
+                // apply makes itself the moment it uses it. It is moved back as it is, or
+                // removed, without any link in it being followed, and a folder of the
+                // install that was moved aside may well hold links of its own.
+                Ok(kind) if kind.is_dir() && folder != aside => folders.push(path),
                 _ => {}
             }
         }
@@ -514,16 +510,14 @@ enum Begun {
     /// What stood at this place in the install folder is moved aside, into the folder of
     /// this step.
     MovedAside { step: String, place: PathBuf },
-    /// The same as an earlier version did it: moved to this numbered slot among the backups.
-    BackedUp { slot: String, place: PathBuf },
     /// A new file is placed here, where nothing was.
     PlacedNew { place: PathBuf },
     /// This folder is made.
     MadeDir { place: PathBuf },
 }
 
-/// What one line of the journal says, or `None` for a line that this version cannot undo:
-/// one of a kind it does not write, with more or less to it than it writes, or naming a
+/// What one line of the journal says, or `None` for a line that cannot be undone: one of a
+/// kind an apply does not write, with more or less to it than an apply writes, or naming a
 /// place that is not inside the install folder.
 fn read_line(line: &str) -> Option<Begun> {
     let mut fields = line.split('\t');
@@ -533,7 +527,6 @@ fn read_line(line: &str) -> Option<Begun> {
         (MOVED_ASIDE, Some(step), Some(name), None) => {
             Some(Begun::MovedAside { step: number(step)?, place: place(name)? })
         }
-        (BACKED_UP, Some(slot), Some(name), None) => Some(Begun::BackedUp { slot: number(slot)?, place: place(name)? }),
         (PLACED_NEW, Some(name), None, None) => Some(Begun::PlacedNew { place: place(name)? }),
         (MADE_DIR, Some(name), None, None) => Some(Begun::MadeDir { place: place(name)? }),
         _ => None,
@@ -593,10 +586,9 @@ fn read_journal(dirs: &Dirs) -> Result<Journal> {
 ///
 /// A journal that cannot be read is nothing to tell of by itself. The next start puts the
 /// folder back from what the apply moved aside, as it would have from the journal. This
-/// answers only where that is known to be out of reach: what was moved aside carries no
-/// names (an earlier version moved it), or putting the folder back was tried and failed.
-/// Whether it will work cannot be seen without trying, so a folder that has not been tried
-/// is not told of here; the try is what [`recover`] does.
+/// answers only where that is known to be out of reach: putting the folder back was tried
+/// and failed. Whether it will work cannot be seen without trying, so a folder that has not
+/// been tried is not told of here; the try is what [`recover`] does.
 ///
 /// A work folder that is a link is not looked into. It is refused for what it is.
 pub(crate) fn unreadable_journal(dirs: &Dirs) -> Option<Problem> {
@@ -644,35 +636,31 @@ fn roll_back(dirs: &Dirs, fuse: &mut Fuse) -> Result<()> {
 
     for (start, begun) in lines.into_iter().rev() {
         fuse.burn()?;
-        // Where what was moved aside lies, for a step that moved something.
-        let moved = match &begun {
-            Begun::MovedAside { step, place } => Some((dirs.aside().join(step).join(place), place)),
-            Begun::BackedUp { slot, place } => Some((dirs.backup().join(slot), place)),
-            Begun::PlacedNew { .. } | Begun::MadeDir { .. } => None,
-        };
-        match (&begun, moved) {
-            // The line may have been written without the move having happened. A link that
-            // was moved aside is there even if what it leads to is not.
-            (_, Some((kept, place))) if fs::symlink_metadata(&kept).is_ok() => {
-                let target = dirs.install.join(place);
-                guard_inside(dirs, &target)?;
-                unplace(&target, &dirs.staged().join(place))?;
-                fuse.burn()?;
-                when_free(|| fs::rename(&kept, &target)).map_err(|e| Error::file("restore", &target, e))?;
+        match &begun {
+            Begun::MovedAside { step, place } => {
+                let kept = dirs.aside().join(step).join(place);
+                // The line may have been written without the move having happened. A link
+                // that was moved aside is there even if what it leads to is not.
+                if fs::symlink_metadata(&kept).is_ok() {
+                    let target = dirs.install.join(place);
+                    guard_inside(dirs, &target)?;
+                    unplace(&target, &dirs.staged().join(place))?;
+                    fuse.burn()?;
+                    when_free(|| fs::rename(&kept, &target)).map_err(|e| Error::file("restore", &target, e))?;
+                }
             }
-            (Begun::PlacedNew { place }, _) => {
+            Begun::PlacedNew { place } => {
                 let target = dirs.install.join(place);
                 guard_inside(dirs, &target)?;
                 unplace(&target, &dirs.staged().join(place))?;
             }
-            (Begun::MadeDir { place }, _) => {
+            Begun::MadeDir { place } => {
                 // Only removes the folder if it is empty again, which it is when everything
                 // placed inside it has been undone.
                 let dir = dirs.install.join(place);
                 guard_inside(dirs, &dir)?;
                 let _ = fs::remove_dir(dir);
             }
-            _ => {}
         }
         fuse.burn()?;
         // This also cuts off a last line that was never finished.
@@ -681,7 +669,6 @@ fn roll_back(dirs: &Dirs, fuse: &mut Fuse) -> Result<()> {
 
     fuse.burn()?;
     when_free(|| fs::remove_file(&journal_path)).map_err(|e| Error::file("remove", &journal_path, e))?;
-    let _ = fs::remove_dir_all(dirs.backup());
     // What is left of the steps are the folders they were kept in. Anything more than
     // that is a file the journal did not know of, which is not thrown away.
     if !restore::holds_files(&dirs.aside()) {

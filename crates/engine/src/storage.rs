@@ -119,7 +119,7 @@ impl Profile {
     }
 
     /// The way to read a drive that looks like `volume`.
-    pub(crate) fn for_volume(volume: &Volume) -> Profile {
+    fn for_volume(volume: &Volume) -> Profile {
         if volume.slow { Profile::slow() } else { Profile::fast() }
     }
 }

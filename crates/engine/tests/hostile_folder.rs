@@ -280,7 +280,7 @@ fn work_folder_that_is_a_link_leads_nothing_out_of_the_install_folder() {
 #[test]
 fn link_inside_the_work_folder_leads_nothing_out_of_the_install_folder() {
     // Each of the folders the engine keeps in its work folder, as a link to elsewhere.
-    for linked in ["new", r"new\Data", "backup", "download"] {
+    for linked in ["new", r"new\Data", "aside", "download"] {
         let case = case(Layout::Table);
         let dirs = case.dirs();
         // Built files wait in the work folder, as after a pause.
@@ -650,10 +650,10 @@ fn work_folder_of_things_the_engine_does_not_know_does_not_stop_a_run_or_survive
             fs::create_dir_all(dirs.work().join("later").join("deep")).unwrap()
         }),
         ("a file where the staged files should be", &|dirs| fs::write(dirs.staged(), b"not a folder").unwrap()),
-        ("a file where the backups should be", &|dirs| fs::write(dirs.backup(), b"not a folder").unwrap()),
-        ("backups without a journal", &|dirs| {
-            fs::create_dir_all(dirs.backup().join("0").join("deep")).unwrap();
-            fs::write(dirs.backup().join("1"), b"left over").unwrap();
+        ("a file where an apply moves things aside", &|dirs| fs::write(dirs.aside(), b"not a folder").unwrap()),
+        ("empty folders of steps, without a journal", &|dirs| {
+            fs::create_dir_all(dirs.aside().join("0").join("deep")).unwrap();
+            fs::create_dir_all(dirs.aside().join("1")).unwrap();
         }),
         ("an empty journal", &|dirs| fs::write(dirs.journal(), b"").unwrap()),
     ];
@@ -679,38 +679,39 @@ fn work_folder_of_things_the_engine_does_not_know_does_not_stop_a_run_or_survive
 /// against the journal: see the test of that further down.
 fn unreadable_journals(outside: &Path) -> Vec<Vec<u8>> {
     let keep = outside.join("keep.txt").to_string_lossy().into_owned();
-    let fixed: [&[u8]; 23] = [
+    let fixed: [&[u8]; 24] = [
         // Cut short: the kind of a line, and not all that belongs to it.
-        b"B\t0\n",
-        b"B\n",
+        b"M\t0\n",
+        b"M\n",
         b"N\n",
         b"D\n",
         b"\n",
-        // Garbage, and lines of a kind this version does not write.
+        // Garbage, and lines of a kind the engine does not write.
         b"X\tData\\A.wz\n",
+        b"B\t0\tData\\A.wz\n",
         b"from a later version of the engine\n",
         b"\xFF\xFE\x00garbage\n",
-        b"B\tnot-a-number\tData\\A.wz\n",
+        b"M\tnot-a-number\tData\\A.wz\n",
         "\u{FEFF}N\tData\\A.wz\n".as_bytes(),
         b"N\tData\\A.wz\r\n",
         // A place outside the install folder, or one that is the engine's own.
-        b"B\t0\t..\\Elsewhere\\keep.txt\n",
+        b"M\t0\t..\\Elsewhere\\keep.txt\n",
         b"N\t..\\Elsewhere\\keep.txt\n",
         b"D\t..\\Elsewhere\n",
         b"N\tData\\..\\..\\Elsewhere\\keep.txt\n",
-        b"B\t0\t.maple-fast-patch.lock\n",
+        b"M\t0\t.maple-fast-patch.lock\n",
         b"N\tCON\n",
         // More to a line than the engine writes.
-        b"B\t0\tData\\A.wz\textra\n",
+        b"M\t0\tData\\A.wz\textra\n",
         b"N\tData\\A.wz\textra\n",
         b"D\tData\\New\textra\n",
         // One such line among good ones: first, in the middle, last.
-        b"X\nN\tData\\New\\Fresh.wz\nB\t0\tData\\A.wz\n",
-        b"N\tData\\New\\Fresh.wz\nX\nB\t0\tData\\A.wz\n",
-        b"N\tData\\New\\Fresh.wz\nB\t0\tData\\A.wz\nX\n",
+        b"X\nN\tData\\New\\Fresh.wz\nM\t0\tData\\A.wz\n",
+        b"N\tData\\New\\Fresh.wz\nX\nM\t0\tData\\A.wz\n",
+        b"N\tData\\New\\Fresh.wz\nM\t0\tData\\A.wz\nX\n",
     ];
     let mut journals: Vec<Vec<u8>> = fixed.iter().map(|journal| journal.to_vec()).collect();
-    let named = [format!("B\t0\t{keep}\n"), format!("N\t{keep}\n"), format!("N\t\\\\?\\{keep}\n")];
+    let named = [format!("M\t0\t{keep}\n"), format!("N\t{keep}\n"), format!("N\t\\\\?\\{keep}\n")];
     journals.extend(named.map(String::into_bytes));
     journals
 }
@@ -727,33 +728,41 @@ fn names_unreadable_journal<T>(result: &Result<T, Error>, work: &Path) -> bool {
 }
 
 #[test]
-fn journal_that_cannot_be_read_is_told_of_as_that_wherever_it_is_read() {
-    // A journal says that an apply was cut off and files of the install lie among the
-    // backups. One that cannot be read cannot be undone, and nothing may go on over it:
-    // every place that reads it says so, in the same words, and changes nothing.
+fn folder_that_cannot_be_put_back_is_told_of_as_that_wherever_its_journal_is_read() {
+    // A journal says that an apply was cut off and files of the install lie where it moved
+    // them aside. One that cannot be read is not acted on, and the folder is put back from
+    // those files. Where that cannot be done either, nothing may go on over the folder:
+    // every place that reads the journal says so, in the same words, and changes nothing.
+    // Here what was moved aside from A is no longer the old A.
     for index in 0.. {
         let case = case(Layout::Table);
         let journals = unreadable_journals(&case.outside);
         let Some(journal) = journals.get(index) else { break };
         let what = format!("{:?}", String::from_utf8_lossy(journal));
+        cut_off_and_damage(&case, usize::MAX, Some(journal));
+        patch_among_downloads(&case);
+        let kept = moved_aside(&case, A);
+        let mut damaged = fs::read(&kept).unwrap();
+        damaged[100] ^= 0x01;
+        fs::write(&kept, &damaged).unwrap();
         let (dirs, work) = (case.dirs(), case.work());
-        write_files(&dirs.backup(), &[("0".to_owned(), b"an original that was moved aside".to_vec())].into());
-        fs::write(dirs.journal(), journal).unwrap();
+        let left_by_the_apply = case.files();
         let nothing_changed = |after: &str| {
-            case.assert_untouched(&format!("{what}, after {after}"));
+            assert!(case.files() == left_by_the_apply, "{what}: a file of the game was changed by {after}");
             case.assert_nothing_outside_touched(&format!("{what}, after {after}"));
             assert!(fs::read(dirs.journal()).unwrap() == *journal, "{what}: the journal was changed by {after}");
-            assert!(dirs.backup().join("0").is_file(), "{what}: the backup was touched by {after}");
+            assert!(fs::read(&kept).unwrap() == damaged, "{what}: what was moved aside was touched by {after}");
         };
 
-        // The look the app takes at a folder, before anything is asked of it.
-        let seen = preflight::check_leftovers(&case.install);
-        assert!(is_unreadable_journal(&seen, &work), "{what}: {seen:?}");
-        nothing_changed("a look");
-        // The undoing that the start of the app asks for.
+        // The undoing that the start of the app asks for finds it out before it moves
+        // anything.
         let recovered = run::recover(&case.install);
         assert!(names_unreadable_journal(&recovered, &work), "{what}: {recovered:?}");
         nothing_changed("a recover");
+        // From then on the look the app takes at a folder says so, without trying again.
+        let seen = preflight::check_leftovers(&case.install);
+        assert!(is_unreadable_journal(&seen, &work), "{what}: {seen:?}");
+        nothing_changed("a look");
         // The start of a run, in either way.
         for immediate in [false, true] {
             let result = case.run_way(immediate, &mut |_| {});
@@ -771,7 +780,7 @@ fn journal_that_cannot_be_read_is_told_of_as_that_wherever_it_is_read() {
 fn journal_with_nothing_but_a_line_that_was_never_finished_says_nothing() {
     // No line break, no line: whatever stands there was being written when the power went,
     // and its step never began. Such a journal is undone by taking it away.
-    for journal in [&b""[..], b"N", b"B\t0\tData\\A.w", b"\xFF\xFE\x00garbage", &[0; 4096]] {
+    for journal in [&b""[..], b"N", b"M\t0\tData\\A.w", b"\xFF\xFE\x00garbage", &[0; 4096]] {
         let what = format!("{:?}", String::from_utf8_lossy(&journal[..journal.len().min(20)]));
         let case = case(Layout::Table);
         fs::create_dir_all(case.work()).unwrap();
@@ -789,7 +798,7 @@ fn journal_with_nothing_but_a_line_that_was_never_finished_says_nothing() {
     let (plan, checked) = build(&case);
     assert!(apply::apply_then_crash(&plan, &checked, &case.dirs(), usize::MAX).unwrap());
     let mut journal = fs::read(case.dirs().journal()).unwrap();
-    journal.extend(b"B\t99\tData\\Sta");
+    journal.extend(b"M\t99\tData\\Sta");
     fs::write(case.dirs().journal(), journal).unwrap();
     assert!(preflight::check_leftovers(&case.install) == [Problem::LeftoverWork { dir: case.work() }]);
     assert_eq!(run::recover(&case.install).unwrap(), Leftover::RolledBack);
@@ -813,14 +822,14 @@ fn knowing_discard_removes_a_work_folder_whose_journal_cannot_be_read_and_nothin
         let journals = unreadable_journals(&case.outside);
         let Some(journal) = journals.get(index) else { break };
         let what = format!("{:?}", String::from_utf8_lossy(journal));
-        // An apply that got some of the way: new files in place, originals among the
-        // backups, built files still waiting, and a patch file that was downloaded.
+        // An apply that got some of the way: new files in place, originals moved aside,
+        // built files still waiting, and a patch file that was downloaded.
         cut_off_with_journal(&case, 9, journal);
         let (dirs, work) = (case.dirs(), case.work());
         write_files(&dirs.download(), &[("some.patch".to_owned(), b"a patch file".to_vec())].into());
         // And links that lead out of the install folder, wherever one could sit.
-        fs::create_dir_all(dirs.backup()).unwrap();
-        for link in [work.join("linked"), dirs.staged().join("Linked"), dirs.backup().join("77")] {
+        fs::create_dir_all(dirs.aside()).unwrap();
+        for link in [work.join("linked"), dirs.staged().join("Linked"), dirs.aside().join("77")] {
             junction(&link, &case.outside);
         }
         let left_by_the_apply = case.files();
@@ -946,28 +955,32 @@ fn journal_that_names_places_outside_moves_nothing_there_and_nothing_from_there(
     let case = case(Layout::Table);
     let keep = case.outside.join("keep.txt").to_string_lossy().into_owned();
     let lines = [
-        "B\t0\t..\\Elsewhere\\keep.txt\n".to_owned(),
+        "M\t0\t..\\Elsewhere\\keep.txt\n".to_owned(),
         "N\t..\\Elsewhere\\keep.txt\n".to_owned(),
         "D\t..\\Elsewhere\\sub\n".to_owned(),
         "D\t..\\Elsewhere\n".to_owned(),
-        format!("B\t0\t{keep}\n"),
+        format!("M\t0\t{keep}\n"),
         format!("N\t{keep}\n"),
         format!("N\t\\\\?\\{keep}\n"),
         "N\tData\\..\\..\\Elsewhere\\keep.txt\n".to_owned(),
-        "B\t..\\..\\Elsewhere\\keep.txt\tData\\A.wz\n".to_owned(),
-        "B\t0\t.maple-fast-patch.lock\n".to_owned(),
+        // A step that is no number but a way out: obeyed, it would take the file beside
+        // the install folder for one that was moved aside, and move it in.
+        "M\t..\\..\\..\\Elsewhere\tkeep.txt\n".to_owned(),
+        "M\t0\t.maple-fast-patch.lock\n".to_owned(),
         "N\tCON\n".to_owned(),
     ];
     for line in lines {
         let dirs = case.dirs();
-        fs::create_dir_all(dirs.backup()).unwrap();
-        fs::write(dirs.backup().join("0"), b"planted").unwrap();
+        // What the first of these lines would move out of the install folder if it were
+        // obeyed: a file where step 0 and a name that climbs out of it lead.
+        write_files(&dirs.aside(), &[(r"Elsewhere\keep.txt".to_owned(), b"planted".to_vec())].into());
         fs::write(dirs.journal(), &line).unwrap();
+        // No line of such a journal is acted on. The folder is put back from the steps that
+        // lie aside, and there are none: nothing is moved anywhere.
         let result = run::recover(&case.install);
-        assert!(names_unreadable_journal(&result, &dirs.work()), "{line:?}: {result:?}");
+        assert!(matches!(result, Ok(Leftover::PutBack)), "{line:?}: {result:?}");
         case.assert_nothing_outside_touched(&format!("{line:?}"));
         case.assert_untouched(&format!("{line:?}"));
-        assert!(!case.outside.join("0").exists() && fs::read(dirs.backup().join("0")).unwrap() == b"planted");
         fs::remove_dir_all(dirs.work()).unwrap();
     }
 }
@@ -1081,7 +1094,7 @@ fn undo_of_an_apply_that_is_killed_at_any_moment_is_finished_by_the_next_start()
                 assert!(kills < 1000, "{layout:?}, cut {cut}: the undoing never ends");
             }
             case.assert_untouched(&format!("{layout:?}, apply cut at {cut}, undo killed {kills} times"));
-            assert!(!dirs.journal().exists() && !dirs.backup().exists(), "{layout:?}, cut {cut}");
+            assert!(!dirs.journal().exists() && !dirs.aside().exists(), "{layout:?}, cut {cut}");
             // Nothing is left that a start would have to undo, and the patch goes on from
             // the files that were built.
             assert_eq!(apply::recover(&dirs).unwrap(), Leftover::Staged, "{layout:?}, cut {cut}");
@@ -1125,14 +1138,13 @@ fn kill_while_the_work_folder_of_a_finished_apply_is_removed_leaves_a_patched_fo
     // everything else, and the mark of the finished apply last. These are the states a
     // kill can leave on the way, each of which the next start has to read as "patched".
     type Left = &'static [&'static str];
-    let states: [Left; 11] = [
-        &["journal", "marker", "new", "backup", "aside", "download", "committed"],
+    let states: [Left; 10] = [
+        &["journal", "marker", "new", "aside", "download", "committed"],
+        &["marker", "new", "aside", "download", "committed"],
+        &["new", "aside", "download", "committed"],
+        &["aside", "download", "committed"],
         &["journal", "aside", "committed"],
         &["aside", "committed"],
-        &["journal", "marker", "new", "backup", "download", "committed"],
-        &["marker", "new", "backup", "download", "committed"],
-        &["new", "backup", "download", "committed"],
-        &["backup", "download", "committed"],
         &["download", "committed"],
         &["committed"],
         &[],
@@ -1149,10 +1161,9 @@ fn kill_while_the_work_folder_of_a_finished_apply_is_removed_leaves_a_patched_fo
             for thing in left {
                 match *thing {
                     // A journal that would move the new files out again if it were obeyed.
-                    "journal" => fs::write(dirs.journal(), "N\tData\\New\\Fresh.wz\nB\t0\tData\\A.wz\n").unwrap(),
+                    "journal" => fs::write(dirs.journal(), "N\tData\\New\\Fresh.wz\nM\t0\tData\\A.wz\n").unwrap(),
                     "marker" => fs::write(dirs.half_patched(), &id).unwrap(),
                     "new" => write_files(&dirs.staged(), &[(STAY.to_owned(), b"stale".to_vec())].into()),
-                    "backup" => write_files(&dirs.backup(), &[("0".to_owned(), case.before[A].clone())].into()),
                     // The old A, kept under its name as an apply keeps what it moves aside.
                     "aside" => write_files(&dirs.aside(), &[(format!("0\\{A}"), case.before[A].clone())].into()),
                     "download" => {
@@ -1173,21 +1184,38 @@ fn kill_while_the_work_folder_of_a_finished_apply_is_removed_leaves_a_patched_fo
 }
 
 #[test]
-fn backups_that_a_finished_apply_could_not_remove_are_not_in_the_way_of_the_next_patch() {
+fn what_a_finished_apply_could_not_remove_is_not_in_the_way_of_the_next_apply() {
     // Removing the work folder of a finished apply gives up quietly on what it cannot
-    // remove. What is left of the backups must not be taken for backups of the next apply.
+    // remove, and leaves the mark of that apply beside it. What is left of the files it
+    // moved aside must not be taken for what the next apply moves aside: a step with a file
+    // in it, an empty one, and a file where a step would be.
+    let leave_steps = |dirs: &Dirs| {
+        fs::create_dir_all(dirs.aside().join("0").join("deep")).unwrap();
+        fs::write(dirs.aside().join("0").join("deep").join("old.wz"), b"left over").unwrap();
+        fs::create_dir_all(dirs.aside().join("1")).unwrap();
+        fs::write(dirs.aside().join("2"), b"left over").unwrap();
+        fs::write(dirs.work().join("committed"), b"").unwrap();
+    };
     let case = case(Layout::Table);
     let dirs = case.dirs();
-    fs::create_dir_all(dirs.backup().join("0").join("deep")).unwrap();
-    fs::write(dirs.backup().join("0").join("deep").join("old.wz"), b"left over").unwrap();
-    fs::create_dir_all(dirs.backup().join("1")).unwrap();
-    fs::write(dirs.backup().join("2"), b"left over").unwrap();
+    leave_steps(&dirs);
     // The folder holds the same patch as built, so the work folder is this patch's own.
     let (plan, checked) = build(&case);
-    fs::create_dir_all(dirs.backup().join("0").join("deep")).unwrap();
-    fs::write(dirs.backup().join("0").join("deep").join("old.wz"), b"left over").unwrap();
+    leave_steps(&dirs);
     apply::apply(&plan, &checked, &dirs, &mut |_| {}).unwrap();
-    case.assert_patched("with backups of an earlier apply in the work folder");
+    case.assert_patched("with steps of an earlier apply in the work folder");
+
+    // The next apply is cut off, and its journal is lost: the folder is put back from what
+    // lies aside. That is what this apply moved there and nothing of the one before it.
+    let case = self::case(Layout::Table);
+    let dirs = case.dirs();
+    let (plan, checked) = build(&case);
+    leave_steps(&dirs);
+    assert!(apply::apply_then_crash(&plan, &checked, &dirs, usize::MAX).unwrap());
+    fs::remove_file(dirs.journal()).unwrap();
+    patch_among_downloads(&case);
+    assert_eq!(run::recover(&case.install).unwrap(), Leftover::Restored);
+    assert_as_before_the_patch(&case, "after an apply that began among steps of an earlier one");
 }
 
 /// Runs the patch and dies at the `at`-th thing the run tells of: the run is torn down
@@ -1248,8 +1276,8 @@ fn run_that_dies_at_any_moment_leaves_every_file_whole_and_the_next_run_finishes
 #[test]
 fn link_that_an_apply_moved_aside_is_moved_back_when_the_apply_is_undone() {
     // The patch deletes a folder of the install that is a link. The apply moves it aside as
-    // the link it is, and dies. Undoing it finds a link among its backups, which is what it
-    // put there, and puts it back.
+    // the link it is, and dies. Undoing it finds a link among what was moved aside, which is
+    // what the apply put there, and puts it back.
     let case = case_with_link(|patch| _ = patch.delete(r"Data\Link\"));
     let link = case.install.join("Data").join("Link");
     let (plan, checked) = build(&case);
@@ -1356,6 +1384,49 @@ fn folder_whose_journal_is_damaged_is_put_back_byte_for_byte_and_proven() {
             if finished {
                 break;
             }
+        }
+    }
+}
+
+#[test]
+fn journal_with_a_line_of_a_kind_the_engine_does_not_know_is_not_acted_on_at_all() {
+    // The journal of an apply that did every one of its steps, whole and true but for the
+    // kind of one line, the first that moved something aside. Undoing the lines that can
+    // be read and stopping at that one would leave a folder that is neither version. None
+    // of it is undone: the folder is put back from what lies aside, as it is for any
+    // journal that cannot be read.
+    for kind in ["B", "X", "m", "MM", ""] {
+        for patch_at_hand in [true, false] {
+            let what = format!("a line of kind {kind:?}, the patch file at hand: {patch_at_hand}");
+            let case = case(Layout::Table);
+            let (plan, checked) = build(&case);
+            assert!(apply::apply_then_crash(&plan, &checked, &case.dirs(), usize::MAX).unwrap());
+            let journal = fs::read_to_string(case.dirs().journal()).unwrap();
+            let changed = journal.replacen("M\t", &format!("{kind}\t"), 1);
+            assert_ne!(changed, journal, "{what}: the apply moved nothing aside");
+            fs::write(case.dirs().journal(), changed).unwrap();
+            if patch_at_hand {
+                patch_among_downloads(&case);
+            }
+
+            // Before anything is tried, it is work that is left, like any other.
+            let seen = preflight::check_leftovers(&case.install);
+            assert!(matches!(&seen[..], [Problem::LeftoverWork { .. }]), "{what}: {seen:?}");
+            // With the patch file to hold the folder against, it is the version before the
+            // patch and is said to be. Without it, every original is back all the same, and
+            // only the file the patch made where nothing was is still there.
+            let healed = run::recover(&case.install).unwrap_or_else(|err| panic!("{what}: {err}"));
+            if patch_at_hand {
+                assert_eq!(healed, Leftover::Restored, "{what}");
+                assert_as_before_the_patch(&case, &what);
+            } else {
+                assert_eq!(healed, Leftover::PutBack, "{what}");
+                let mut now = case.files();
+                assert!(now.remove(FRESH) == case.after.get(FRESH).cloned() && now == case.before, "{what}");
+            }
+            assert!(!run::cut_off(&case.install), "{what}: the folder still counts as cut off");
+            case.run(&mut |_| {}).unwrap_or_else(|err| panic!("{what}: the patch again: {err}"));
+            case.assert_patched(&what);
         }
     }
 }

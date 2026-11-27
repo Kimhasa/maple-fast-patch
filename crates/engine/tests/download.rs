@@ -11,9 +11,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mfp_engine::container::PatchFile;
-use mfp_engine::plan::Layout;
+use mfp_engine::plan::{self, Layout};
 use mfp_engine::run::{Disk, half_patched, run_on_disk};
-use mfp_engine::{Error, Event, Options, Outcome, Source, Stage, download};
+use mfp_engine::{Error, Event, Options, Outcome, Source, Stage, detect, download};
 use support::{Drive, GO, LIVE, PatchBuilder, Rng, World, files_under, run};
 
 /// What the server holds and how it should misbehave.
@@ -1122,4 +1122,62 @@ fn piece_from_the_wrong_place_under_the_right_heading_never_reaches_the_install(
     assert!(matches!(err, Error::NotAPatchFile | Error::CorruptPatch(_)), "unexpected error: {err}");
     world.assert_untouched("after pieces from the wrong place");
     assert!(!dest.exists(), "the damaged file was kept for the next run");
+}
+
+#[test]
+fn originals_of_a_patch_on_the_server_are_told_from_its_start() {
+    let originals = |server: &Server| detect::remote_originals(&server.url);
+
+    // A patch with a table: the table the whole file gives, from one request.
+    let world = World::random(60, Layout::Table);
+    let whole = plan::scan(&PatchFile::open(&world.patch).unwrap(), &GO).unwrap().originals;
+    assert!(!whole.is_empty());
+    let server = Server::start(fs::read(&world.patch).unwrap());
+    assert_eq!(originals(&server).unwrap(), Some(whole));
+    assert_eq!(server.log(), ["GET from 0"]);
+
+    // A table longer than the first piece that is fetched is asked for again, in a longer
+    // piece. The names are ones that do not compress well.
+    let mut rng = Rng::new(61);
+    let mut long = PatchBuilder::new(Layout::Table);
+    for at in 0..30_000 {
+        long.original(&format!(r"Data\{:016x}{:016x}\{at}.wz", rng.next(), rng.next()), &[]);
+    }
+    let server = Server::start(long.create(r"Data\New.wz", b"new").bytes());
+    assert_eq!(originals(&server).unwrap().map(|table| table.len()), Some(30_000));
+    assert_eq!(server.log(), ["GET from 0", "GET from 0"]);
+
+    // What is no patch file is refused as none: a page, and a file too short to be one.
+    for body in [b"<!DOCTYPE html><html><body>Please sign in.</body></html>".repeat(40), b"WzPatch".to_vec()] {
+        let server = Server::start(body);
+        assert!(matches!(originals(&server), Err(Error::NotAPatchFile)));
+    }
+    // And a patch the server does not have is not published.
+    server.set(|site| site.status = Some(404));
+    assert!(matches!(originals(&server), Err(Error::NotPublished)));
+}
+
+#[test]
+fn patch_whose_start_shows_that_it_has_no_table_is_not_asked_for_again() {
+    // A patch of the older layout, longer than the first piece that is fetched. It begins
+    // with its first entry, and no more of the file would turn that into a table: the one
+    // piece is all that is asked for.
+    let mut rng = Rng::new(62);
+    let older = PatchBuilder::new(Layout::PerEntry).create(r"Data\New.wz", &rng.bytes(400_000)).bytes();
+    assert!(older.len() > 256 << 10, "the made-up patch fits in the first piece: {} bytes", older.len());
+    let server = Server::start(older);
+    assert_eq!(detect::remote_originals(&server.url).unwrap(), None);
+    assert_eq!(server.log(), ["GET from 0"]);
+
+    // A file that ends inside its table, and came whole with the first piece: there is no
+    // more of it to ask for.
+    let mut cut = PatchBuilder::new(Layout::Table);
+    for at in 0..2000 {
+        cut.original(&format!(r"Data\{:016x}\{at}.wz", rng.next()), &[]);
+    }
+    let mut cut = cut.bytes();
+    cut.truncate(cut.len() / 2);
+    let server = Server::start(cut);
+    assert_eq!(detect::remote_originals(&server.url).unwrap(), None);
+    assert_eq!(server.log(), ["GET from 0"]);
 }

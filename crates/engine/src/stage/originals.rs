@@ -97,8 +97,9 @@ pub fn files_present(names: impl IntoIterator<Item = String>, root: &Path) -> Ve
 
 /// Confirms that every original file a rebuild copies from is exactly the file the patch was
 /// made for. Reports all files that differ, not only the first. Where they are all the right
-/// files and a copy reads past the end of one, it is the patch that is refused. `on_progress` hears, from
-/// whichever thread is reading, which file is being read and how many more bytes of it were.
+/// files and a copy reads past the end of one, it is the patch that is refused.
+/// `on_progress` hears, from whichever thread is reading, which file is being read and how
+/// many more bytes of it were.
 pub fn check_originals(
     plan: &Plan,
     install: &Path,

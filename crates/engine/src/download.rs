@@ -625,23 +625,32 @@ impl Piece<'_> {
     }
 }
 
-/// What a small read brought: its text, and what the server said the time was as it
-/// answered, which is its `Date` header as it was sent. Whoever goes by the clock can hold
-/// its own against that.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Dated {
-    pub text: String,
-    pub date: Option<String>,
+/// How long the answer to a small read may take to arrive.
+const SMALL_READ_TIME: Duration = Duration::from_secs(30);
+
+/// Asks for a small page. The answer comes back whatever its status, with its body unread.
+fn ask_for_page(url: &str) -> Result<ureq::http::Response<ureq::Body>> {
+    agent(secure(url), Some(SMALL_READ_TIME)).get(url).call().map_err(transport)
+}
+
+/// Turns down an answer to a small read that is anything but "200 OK".
+fn require_ok(response: &ureq::http::Response<ureq::Body>) -> Result<()> {
+    match response.status().as_u16() {
+        200 => Ok(()),
+        status => Err(Error::Download { status: Some(status), detail: "unexpected answer".into() }),
+    }
+}
+
+/// The body of an answer as text, at most `limit` bytes of it.
+fn text(response: ureq::http::Response<ureq::Body>, limit: u64) -> Result<String> {
+    Ok(String::from_utf8_lossy(&body(response, limit)?).into_owned())
 }
 
 /// Fetches a small page as text, at most `limit` bytes of it.
 pub fn page(url: &str, limit: u64) -> Result<String> {
-    let response = agent(secure(url), Some(Duration::from_secs(30))).get(url).call().map_err(transport)?;
-    let status = response.status().as_u16();
-    if status != 200 {
-        return Err(Error::Download { status: Some(status), detail: "unexpected answer".into() });
-    }
-    Ok(String::from_utf8_lossy(&body(response, limit)?).into_owned())
+    let response = ask_for_page(url)?;
+    require_ok(&response)?;
+    text(response, limit)
 }
 
 /// What a site answered a small read with, whatever the answer was: its status, the path
@@ -659,11 +668,10 @@ pub struct Answer {
 /// Reads a small page whatever status it is answered with. Fails only where no answer came.
 pub fn page_answer(url: &str, limit: u64) -> Result<Answer> {
     use ureq::ResponseExt;
-    let request = agent(secure(url), Some(Duration::from_secs(30))).get(url).config().http_status_as_error(false);
-    let response = request.build().call().map_err(transport)?;
+    let response = ask_for_page(url)?;
     let (status, path) = (response.status().as_u16(), response.get_uri().path().to_owned());
-    let date = response.headers().get("date").and_then(|date| date.to_str().ok()).map(str::to_owned);
-    Ok(Answer { status, path, text: String::from_utf8_lossy(&body(response, limit)?).into_owned(), date })
+    let date = header(&response, "date");
+    Ok(Answer { status, path, text: text(response, limit)?, date })
 }
 
 /// An agent that leaves TLS to Windows itself. Some of Nexon's older servers only offer
@@ -673,28 +681,30 @@ fn system_agent(url: &str) -> ureq::Agent {
         .provider(ureq::tls::TlsProvider::NativeTls)
         .root_certs(ureq::tls::RootCerts::PlatformVerifier)
         .build();
-    agent_with(tls, secure(url), Some(Duration::from_secs(30)))
+    agent_with(tls, secure(url), Some(SMALL_READ_TIME))
 }
 
-/// Asks a SOAP service one question and returns its answer as text, at most `limit` bytes.
-pub fn soap(url: &str, action: &str, envelope: &str, limit: u64) -> Result<String> {
-    soap_dated(url, action, envelope, limit).map(|dated| dated.text)
+/// What a small read brought: its text, and what the server said the time was as it
+/// answered, which is its `Date` header as it was sent. Whoever goes by the clock can hold
+/// its own against that.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dated {
+    pub text: String,
+    pub date: Option<String>,
 }
 
-/// [`soap`], with the time the server said it was.
-pub fn soap_dated(url: &str, action: &str, envelope: &str, limit: u64) -> Result<Dated> {
+/// Asks a SOAP service one question and returns its answer as text, at most `limit` bytes,
+/// with the time the server said it was.
+pub fn soap(url: &str, action: &str, envelope: &str, limit: u64) -> Result<Dated> {
     let response = system_agent(url)
         .post(url)
         .header("Content-Type", "text/xml; charset=utf-8")
         .header("SOAPAction", format!("\"{action}\""))
         .send(envelope)
         .map_err(transport)?;
-    let status = response.status().as_u16();
-    if status != 200 {
-        return Err(Error::Download { status: Some(status), detail: "unexpected answer".into() });
-    }
-    let date = response.headers().get("date").and_then(|date| date.to_str().ok()).map(str::to_owned);
-    Ok(Dated { text: String::from_utf8_lossy(&body(response, limit)?).into_owned(), date })
+    require_ok(&response)?;
+    let date = header(&response, "date");
+    Ok(Dated { text: text(response, limit)?, date })
 }
 
 /// Downloads only the first `len` bytes of a file.

@@ -184,10 +184,9 @@ impl Drop for InstallLock {
 /// It fails with [`Problem::UnreadableJournal`] where the journal cannot be read and the
 /// folder cannot be put back without it either: what was moved aside is not what the patch
 /// says the old files are, or the check afterwards found that the patch cannot be applied
-/// to what is there, or an earlier version moved things aside without their names. The
-/// `detail` says which.
-/// Nothing but [`discard_work_as_it_is`] clears such a folder. A file held by another
-/// program or a link in the way fail as themselves, and the next call tries again.
+/// to what is there. The `detail` says which. Nothing but [`discard_work_as_it_is`] clears
+/// such a folder. A file held by another program or a link in the way fail as themselves,
+/// and the next call tries again.
 ///
 /// Putting a folder back without its journal reads the patch file and the originals, which
 /// takes as long as the check of the game files at the start of a run.
