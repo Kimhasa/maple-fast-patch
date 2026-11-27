@@ -6,6 +6,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use mfp_engine::preflight::{LOCK_FILE_NAME, WORK_DIR_NAME};
 use windows_sys::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
@@ -20,9 +22,12 @@ const PATCHER_LOG: &str = "Patcher.log";
 const LOG_TAIL: u64 = 1 << 20;
 /// A folder with more entries than this is not walked to its end: it is no game folder.
 const MOST_ENTRIES: u64 = 200_000;
+/// The longest a folder is walked. A game folder is listed in well under a second, also
+/// on a seat that gets it from a server; a drive that takes longer is not waited for.
+const WALK_TIME: Duration = Duration::from_secs(4);
 
 /// What walking a folder found.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Walked {
     /// How many files, and their sizes added up.
     pub files: u64,
@@ -36,12 +41,22 @@ pub struct Walked {
 }
 
 /// Lists every file under `install` with its size, reading none. Links to other folders are
-/// not followed.
-pub fn walk(install: &Path) -> Walked {
+/// not followed. Setting `stop` ends it at the next folder, as taking too long does.
+pub fn walk(install: &Path, stop: &AtomicBool) -> Walked {
+    walk_within(install, WALK_TIME, stop)
+}
+
+/// As [`walk`], given up when it has taken longer than `within`.
+fn walk_within(install: &Path, within: Duration, stop: &AtomicBool) -> Walked {
+    let started = Instant::now();
     let mut walked = Walked::default();
     let mut entries = 0u64;
     let mut todo = vec![install.to_path_buf()];
     while let Some(dir) = todo.pop() {
+        if started.elapsed() >= within || stop.load(Ordering::Relaxed) {
+            walked.cut_short = Some(Unknown::NoAnswer);
+            return walked;
+        }
         let children = match fs::read_dir(&dir) {
             Ok(children) => children,
             Err(err) => {
@@ -187,7 +202,7 @@ mod tests {
         let log = "old 00421_03\r\nnew 00421_04\r\n";
         fs::write(install.join("Patcher.log"), log).unwrap();
 
-        let walked = walk(install);
+        let walked = walk(install, &AtomicBool::new(false));
         assert_eq!((walked.files, walked.bytes), (4, 300 + 1000 + 5000 + log.len() as u64));
         assert_eq!(
             walked.largest.as_ref().map(|(path, len)| (path.file_name().unwrap().to_str().unwrap(), *len)),
@@ -204,7 +219,7 @@ mod tests {
         assert!(matches!(game.file_version, Err(Unknown::Windows(_))), "{:?}", game.file_version);
 
         fs::create_dir(install.join(".maple-fast-patch")).unwrap();
-        assert!(look(install, "MapleStory.exe", &walk(install)).app_traces);
+        assert!(look(install, "MapleStory.exe", &walk(install, &AtomicBool::new(false))).app_traces);
     }
 
     #[test]
@@ -219,9 +234,23 @@ mod tests {
     #[test]
     fn folder_that_is_not_there_is_an_empty_walk_with_the_reason() {
         let dir = tempfile::tempdir().unwrap();
-        let walked = walk(&dir.path().join("gone"));
+        let walked = walk(&dir.path().join("gone"), &AtomicBool::new(false));
         assert_eq!(walked.files, 0);
         assert!(matches!(walked.cut_short, Some(Unknown::Windows(_))));
         assert!(look(&dir.path().join("gone"), "MapleStory.exe", &walked).files.is_err());
+    }
+
+    #[test]
+    fn walk_that_takes_too_long_is_given_up_with_what_it_has() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("MapleStory.exe"), b"the game").unwrap();
+        let going = AtomicBool::new(false);
+        assert_eq!((walk(dir.path(), &going).files, walk(dir.path(), &going).cut_short), (1, None));
+        // With no time at all, nothing is listed, and that it was cut short is noted.
+        let walked = walk_within(dir.path(), Duration::ZERO, &going);
+        assert_eq!((walked.files, walked.cut_short), (0, Some(Unknown::NoAnswer)));
+        // A stop ends it in the same way.
+        let walked = walk(dir.path(), &AtomicBool::new(true));
+        assert_eq!((walked.files, walked.cut_short), (0, Some(Unknown::NoAnswer)));
     }
 }

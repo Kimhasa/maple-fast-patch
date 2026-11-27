@@ -2220,6 +2220,7 @@ dependencies = [
 name = "maple-fast-patch"
 version = "0.1.0"
 dependencies = [
+ "mfp-check",
  "mfp-engine",
  "mfp-kms",
  "serde",
@@ -2272,7 +2273,7 @@ dependencies = [
 
 [[package]]
 name = "mfp-check"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "flate2",
  "mfp-engine",

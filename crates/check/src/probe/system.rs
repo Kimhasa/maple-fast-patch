@@ -6,7 +6,7 @@ use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 
 use super::registry::{self, Root};
 use super::{last_error, volume};
-use crate::facts::{Adapter, DriveKind, Fact, Rights, Unknown, WebView};
+use crate::facts::{Adapter, DriveKind, Fact, Memory, Rights, Unknown, WebView};
 use crate::privacy::Scrub;
 use crate::wide::{from_wide, from_wide_ptr};
 
@@ -72,7 +72,7 @@ pub fn windows(edition_and_build: &str) -> String {
         _ => "32비트",
     };
     if edition_and_build.is_empty() {
-        format!("확인 불가 · {bits}")
+        format!("확인 실패 · {bits}")
     } else {
         format!("{edition_and_build} · {bits}")
     }
@@ -237,13 +237,25 @@ pub fn adapters() -> Fact<Vec<Adapter>> {
     Ok(found)
 }
 
-/// Memory that is free for programs right now, in bytes.
-pub fn memory_free() -> Option<u64> {
-    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+/// What Windows says of its memory right now: what is available, and the three counters
+/// that tell where memory went when less is available than before.
+pub fn memory() -> Option<Memory> {
+    use windows_sys::Win32::System::ProcessStatus::{K32GetPerformanceInfo, PERFORMANCE_INFORMATION};
 
-    let mut memory = MEMORYSTATUSEX { dwLength: size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
-    // SAFETY: `memory` says its own size, as the call requires of what it fills in.
-    (unsafe { GlobalMemoryStatusEx(&mut memory) } != 0).then_some(memory.ullAvailPhys)
+    let mut counters = PERFORMANCE_INFORMATION::default();
+    let size = size_of::<PERFORMANCE_INFORMATION>() as u32;
+    // SAFETY: the structure is passed with its true size, and the call fills in nothing else.
+    if unsafe { K32GetPerformanceInfo(&mut counters, size) } == 0 {
+        return None;
+    }
+    // Windows counts in pages and says how long a page is.
+    let bytes = |pages: usize| (pages as u64).saturating_mul(counters.PageSize as u64);
+    Some(Memory {
+        available: bytes(counters.PhysicalAvailable),
+        cache: bytes(counters.SystemCache),
+        nonpaged: bytes(counters.KernelNonpaged),
+        commit: bytes(counters.CommitTotal),
+    })
 }
 
 /// The folder Windows itself is in, which tells the system drive.
@@ -266,10 +278,14 @@ mod tests {
         for adapter in adapters().expect("the network cards could not be listed") {
             assert!(!adapter.model.is_empty(), "{adapter:?}");
         }
-        assert!(memory_free().is_some_and(|free| free > 0));
+        // Something is available, something is in use, and all of it is whole megabytes
+        // and more: a page count taken for bytes would be far below that.
+        let memory = memory().expect("Windows did not say what memory it has");
+        assert!(memory.available > 64 << 20 && memory.commit > 64 << 20 && memory.nonpaged > 1 << 20, "{memory:?}");
+        assert!(memory.cache > 0, "{memory:?}");
         assert!(now() > 1_700_000_000);
         assert!(windows("Windows 11 Pro (26200)").starts_with("Windows 11 Pro (26200) · "));
-        assert!(windows("").starts_with("확인 불가 · "));
+        assert!(windows("").starts_with("확인 실패 · "));
         // The tests run from a drive of this PC.
         assert!(matches!(started_from(), Ok(DriveKind::Fixed | DriveKind::Removable | DriveKind::RamDisk)));
         assert!(windows_dir().is_absolute());

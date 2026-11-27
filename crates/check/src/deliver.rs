@@ -79,11 +79,11 @@ mod tests {
     #[test]
     fn report_is_saved_as_text_that_notepad_reads_as_utf8() {
         let dir = tempfile::tempdir().unwrap();
-        let saved = save("진단 0.1.0\n판정: 일반 PC로 보임\n", dir.path(), 1_795_675_260).unwrap();
+        let saved = save("검사 0.1.0\n판정: 일반 PC로 보임\n", dir.path(), 1_795_675_260).unwrap();
         assert_eq!(saved.file_name().unwrap(), "mfp-check-20261126-1541.txt");
         let bytes = std::fs::read(&saved).unwrap();
         assert_eq!(&bytes[..3], [0xEF, 0xBB, 0xBF]);
-        assert_eq!(String::from_utf8(bytes[3..].to_vec()).unwrap(), "진단 0.1.0\r\n판정: 일반 PC로 보임\r\n");
+        assert_eq!(String::from_utf8(bytes[3..].to_vec()).unwrap(), "검사 0.1.0\r\n판정: 일반 PC로 보임\r\n");
         // Line ends that are Windows' already stay single.
         assert_eq!(as_file("a\r\nb")[3..], *b"a\r\nb\r\n");
         // A folder that is not there is an error with its number.

@@ -108,30 +108,12 @@ pub fn from_typed(typed: &str, client: &Client) -> Option<PathBuf> {
     look_through(Path::new(typed), client)
 }
 
-/// The registry key Nexon's installer writes the install folder to, under `HKLM\SOFTWARE`
-/// in the 32-bit view, and the name of the value. Known for the live client only. (The
-/// same key is in `mfp-kms`, which does not hand it out.)
-#[cfg(windows)]
-const RECORDED: (&str, &str) = (r"SOFTWARE\Wizet\Maple", "RootPath");
-
-/// What the registry says the install folder of the client of `server` is. The folder is
-/// not looked at: this is the text and nothing more.
-#[cfg(windows)]
+/// What the registry says the install folder of the client of `server` is, without spaces
+/// around it. The folder is not looked at: this is the text and nothing more. `None` for a
+/// client whose registry key is not known, and where nothing is written there.
 pub fn recorded(server: Server) -> Option<String> {
-    use crate::probe::registry::{self, Root};
-    match server {
-        Server::Live => registry::text(Root::Machine32, RECORDED.0, RECORDED.1).filter(|dir| !dir.is_empty()),
-        Server::Test => None,
-    }
-}
-
-/// The folder Nexon's installer puts the client of `server` in unless told otherwise. (As
-/// in `mfp-kms`, which does not hand it out either.)
-fn usual(server: Server) -> &'static str {
-    match server {
-        Server::Live => r"C:\Nexon\Maple",
-        Server::Test => r"C:\Nexon\MapleT",
-    }
+    let recorded = server.client().recorded_install_dir()?;
+    Some(recorded.trim().to_owned()).filter(|dir| !dir.is_empty())
 }
 
 #[cfg(windows)]
@@ -147,7 +129,8 @@ impl Places {
             })
             .map(|(letter, _)| PathBuf::from(format!("{letter}\\")))
             .collect();
-        Places { recorded: recorded(server).map(PathBuf::from), usual: Some(PathBuf::from(usual(server))), roots }
+        let usual = server.client().usual_install_dir();
+        Places { recorded: recorded(server).map(PathBuf::from), usual: Some(PathBuf::from(usual)), roots }
     }
 }
 
@@ -249,10 +232,5 @@ mod tests {
         assert_eq!(from_typed(&drive.path().join("Nexon").display().to_string(), LIVE), Some(folder));
         assert_eq!(from_typed("", LIVE), None);
         assert_eq!(from_typed(&drive.path().join("gone").display().to_string(), LIVE), None);
-    }
-
-    #[test]
-    fn usual_folders_are_those_of_the_two_clients() {
-        assert_eq!((usual(Server::Live), usual(Server::Test)), (r"C:\Nexon\Maple", r"C:\Nexon\MapleT"));
     }
 }

@@ -1,7 +1,9 @@
 [package]
 name = "mfp-check"
 description = "Says what kind of PC this is (a home PC, or a PC room seat with or without a disk of its own) and whether a patch ahead of time is expected to work on it."
-version.workspace = true
+# The diagnostic counts its own versions: a report names the one that wrote it, and that
+# tells which rules it was read by.
+version = "0.3.0"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -11,8 +13,6 @@ publish = false
 mfp-engine = { path = "../engine" }
 # Which programs and which addresses belong to which of the two clients.
 mfp-kms = { path = "../kms" }
-# The start of a patch file is read from memory, so that nothing is written to this PC for it.
-flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 
 [target.'cfg(windows)'.dependencies]
 # Everything the diagnostic asks of Windows is asked directly: how a drive is attached, what
@@ -30,6 +30,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_IO",
     "Win32_System_Ioctl",
     "Win32_System_Memory",
+    "Win32_System_ProcessStatus",
     "Win32_System_Registry",
     "Win32_System_Services",
     "Win32_System_SystemInformation",
@@ -39,3 +40,5 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 tempfile = "3.27"
+# The tests make the start of a patch file, compressed the way a real one is.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }

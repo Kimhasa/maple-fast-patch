@@ -16,9 +16,16 @@ pub fn count(number: u64) -> String {
     out
 }
 
+/// The figure of a size in gigabytes, with one place after the point and without the unit:
+/// `211.3`, `3,722.7`.
+pub fn gigabytes(bytes: u64) -> String {
+    let tenths = (bytes as f64 / GB * 10.0).round() as u64;
+    format!("{}.{}", count(tenths / 10), tenths % 10)
+}
+
 /// A size in gigabytes with one place after the point: `211.3 GB`.
 pub fn gb(bytes: u64) -> String {
-    format!("{:.1} GB", bytes as f64 / GB)
+    format!("{} GB", gigabytes(bytes))
 }
 
 /// A size in megabytes below a gigabyte and in gigabytes from there: `512 MB`, `1.1 GB`.
@@ -26,11 +33,26 @@ pub fn size(bytes: u64) -> String {
     if bytes < 1 << 30 { format!("{:.0} MB", bytes as f64 / MB) } else { gb(bytes) }
 }
 
+/// The figure of a speed in megabytes a second, without the unit: `82`, `1,900`, and one
+/// place after the point below ten.
+pub fn megabytes_a_second(bytes_a_second: f64) -> String {
+    let megabytes = bytes_a_second / MB;
+    if megabytes < 10.0 { format!("{megabytes:.1}") } else { count(megabytes.round() as u64) }
+}
+
 /// A speed from bytes a second: `82 MB/s`, `1,900 MB/s`, and one place after the point
 /// below ten.
 pub fn speed(bytes_a_second: f64) -> String {
-    let megabytes = bytes_a_second / MB;
-    if megabytes < 10.0 { format!("{megabytes:.1} MB/s") } else { format!("{} MB/s", count(megabytes.round() as u64)) }
+    format!("{} MB/s", megabytes_a_second(bytes_a_second))
+}
+
+/// A time in milliseconds: `12 ms`, and one place after the point below ten.
+pub fn milliseconds(milliseconds: f64) -> String {
+    if milliseconds < 10.0 {
+        format!("{milliseconds:.1} ms")
+    } else {
+        format!("{} ms", count(milliseconds.round() as u64))
+    }
 }
 
 /// A time as minutes and seconds: `7분 12초`, `42초`, and tenths below ten seconds.
@@ -104,11 +126,21 @@ mod tests {
     fn sizes_and_speeds_go_by_1024() {
         assert_eq!(gb(211 << 30), "211.0 GB");
         assert_eq!(gb((49 << 30) + (922 << 20)), "49.9 GB");
+        // A thousand and more get their comma, and the figure can stand without its unit.
+        assert_eq!(gb((3722 << 30) + (717 << 20)), "3,722.7 GB");
+        assert_eq!((gigabytes(80 << 30), gigabytes((7451 << 30) + (820 << 20))), ("80.0".into(), "7,451.8".into()));
+        assert_eq!(gigabytes((9 << 30) + (1023 << 20)), "10.0");
         assert_eq!(size(512 << 20), "512 MB");
         assert_eq!(size(1 << 30), "1.0 GB");
         assert_eq!(speed(82.0 * MB), "82 MB/s");
         assert_eq!(speed(1900.4 * MB), "1,900 MB/s");
         assert_eq!(speed(9.84 * MB), "9.8 MB/s");
+        assert_eq!((megabytes_a_second(1799.2 * MB), megabytes_a_second(4.26 * MB)), ("1,799".into(), "4.3".into()));
+    }
+
+    #[test]
+    fn short_times_are_milliseconds() {
+        assert_eq!([0.34, 4.66, 12.4, 1234.0].map(milliseconds), ["0.3 ms", "4.7 ms", "12 ms", "1,234 ms"]);
     }
 
     #[test]

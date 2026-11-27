@@ -6,16 +6,17 @@
 //! and a patch newer than the table is taken into account.
 //!
 //! Nothing but Nexon's patch server is asked, and nothing is sent to it but the requests
-//! for those files. The server is asked through a [`Shelf`], so that all of this can be
-//! tried on a made-up one, without a network.
+//! for those files. How long the way to it is, is timed by opening a connection to it and
+//! closing it again, with nothing sent over it. The server is asked through a [`Shelf`], so
+//! that all of this can be tried on a made-up one, without a network.
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
-use std::io::Read;
-use std::time::Instant;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::time::{Duration, Instant};
 
-use flate2::read::DeflateDecoder;
-use mfp_engine::{Error, download, plan};
+use mfp_engine::plan::{self, Start};
+use mfp_engine::{Error, download};
 use mfp_kms::Client;
 
 use crate::facts::{Traffic, Unknown};
@@ -34,6 +35,10 @@ const LAST_MINOR: u32 = 99;
 const REACH: u32 = 5;
 /// The most patch files the minors of one version are asked for.
 const MOST_MINORS: u32 = 12;
+/// How many connections are opened to time the way to the server. The quickest counts.
+const CONNECTS: usize = 3;
+/// The longest a connection is given to open.
+const CONNECT_TIME: Duration = Duration::from_secs(2);
 
 /// What the diagnostic asks of the server a client's patch files are published on.
 pub trait Shelf {
@@ -43,6 +48,10 @@ pub trait Shelf {
     /// The first `len` bytes of the file at `url`, or all of it when it is shorter. `None`
     /// when the server has no such file.
     fn start_of(&self, url: &str, len: u64) -> Result<Option<Vec<u8>>, Unknown>;
+
+    /// The milliseconds a connection to the server of the file at `url` takes to open:
+    /// there and back once. Nothing is asked of the server over it.
+    fn round_trip(&self, url: &str) -> Result<f64, Unknown>;
 }
 
 /// Nexon's server, with a count of what was asked of it.
@@ -98,67 +107,72 @@ impl Shelf for Nexon {
             Err(err) => Err(refused(err)),
         }
     }
+
+    fn round_trip(&self, url: &str) -> Result<f64, Unknown> {
+        let (host, port) = host_of(url).ok_or(Unknown::NoAnswer)?;
+        // The name is looked up first: that is no part of the way there and back.
+        let addresses: Vec<SocketAddr> = (host, port).to_socket_addrs().map_err(|_| Unknown::NoConnection)?.collect();
+        quickest_connect(&addresses, CONNECTS, CONNECT_TIME)
+    }
 }
 
-/// What the start of a patch file holds.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Start {
-    /// The table of the files the patch starts from, whole.
-    Table(BTreeMap<String, u32>),
-    /// The bytes end before the table does.
-    CutOff,
-    /// This is no patch file with such a table.
-    NoTable,
-}
-
-/// How a patch file begins, and the most files its table may name; as in the engine.
-const MAGIC: &[u8; 8] = b"WzPatch\x1A";
-const HEADER: usize = 16;
-const MOST_FILES: i32 = 100_000;
-const LONGEST_NAME: i32 = 260;
-
-/// Reads the table of original files out of the first bytes of a patch file.
-pub fn read_start(bytes: &[u8]) -> Start {
-    if bytes.len() < HEADER + 2 {
-        return Start::CutOff;
-    }
-    if &bytes[..8] != MAGIC {
-        return Start::NoTable;
-    }
-    let mut payload = &bytes[HEADER..];
-    // The compressed data normally begins with a two-byte zlib header.
-    if payload[0] == 0x78 && (u16::from(payload[0]) << 8 | u16::from(payload[1])).is_multiple_of(31) {
-        payload = &payload[2..];
-    }
-    let mut contents = DeflateDecoder::new(payload);
-    // Running out of bytes is the one thing that more bytes can mend.
-    let number = |contents: &mut DeflateDecoder<&[u8]>| -> Option<[u8; 4]> {
-        let mut bytes = [0u8; 4];
-        contents.read_exact(&mut bytes).ok().map(|()| bytes)
+/// The name of the server in an address and the port its files are fetched from: the one
+/// the address names, or else the one its scheme goes to.
+fn host_of(url: &str) -> Option<(&str, u16)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let usual = match scheme {
+        "https" => 443,
+        "http" => 80,
+        _ => return None,
     };
-    let Some(count) = number(&mut contents).map(i32::from_le_bytes) else { return Start::CutOff };
-    if !(0..=MOST_FILES).contains(&count) {
-        return Start::NoTable;
+    let host = rest.split(['/', '?', '#']).next().filter(|host| !host.is_empty() && !host.contains('@'))?;
+    match host.rsplit_once(':') {
+        Some((name, port)) if !name.is_empty() => Some((name, port.parse().ok()?)),
+        Some(_) => None,
+        None => Some((host, usual)),
     }
-    let mut table = BTreeMap::new();
-    for _ in 0..count {
-        let Some(len) = number(&mut contents).map(i32::from_le_bytes) else { return Start::CutOff };
-        if !(0..=LONGEST_NAME).contains(&len) {
-            return Start::NoTable;
-        }
-        let mut name = vec![0u8; len as usize];
-        if contents.read_exact(&mut name).is_err() {
-            return Start::CutOff;
-        }
-        let Some(crc) = number(&mut contents).map(u32::from_le_bytes) else { return Start::CutOff };
-        // The names decide which files of the folder are read. One that could lead out of
-        // the folder makes the whole table one that is not gone by.
-        let Ok(name) = String::from_utf8(name) else { return Start::NoTable };
-        if !name.is_ascii() || plan::relative_path(&name).is_err() || table.insert(name, crc).is_some() {
-            return Start::NoTable;
+}
+
+/// Opens a connection to the first of `addresses` that takes one, `tries` times one after
+/// the other, and says how many milliseconds the quickest took: the time of one trip there
+/// and back. Nothing is sent over a connection, and each is closed at once.
+///
+/// A try is given `within`. Until one connection has opened, all of the addresses together
+/// are given that long and no more: a server that cannot be reached this way is not waited
+/// for three times over.
+pub fn quickest_connect(addresses: &[SocketAddr], tries: usize, within: Duration) -> Result<f64, Unknown> {
+    let milliseconds = |began: Instant| began.elapsed().as_secs_f64() * 1000.0;
+    // Addresses of the older kind first: most lines carry those.
+    let mut ordered: Vec<&SocketAddr> = addresses.iter().collect();
+    ordered.sort_by_key(|address| address.is_ipv6());
+    let started = Instant::now();
+    let mut reached = None;
+    for address in ordered {
+        let Some(left) = within.checked_sub(started.elapsed()).filter(|left| !left.is_zero()) else { break };
+        let began = Instant::now();
+        if TcpStream::connect_timeout(address, left).is_ok() {
+            reached = Some((address, milliseconds(began)));
+            break;
         }
     }
-    Start::Table(table)
+    let (address, mut quickest) = reached.ok_or(Unknown::NoConnection)?;
+    for _ in 1..tries {
+        let began = Instant::now();
+        if TcpStream::connect_timeout(address, within).is_ok() {
+            quickest = quickest.min(milliseconds(began));
+        }
+    }
+    Ok(quickest)
+}
+
+/// Reads the table of original files out of the first bytes of a patch file, the way the
+/// engine does.
+///
+/// The names in it decide which files of the folder are read. A table with a name that
+/// could lead out of the folder is one that is not gone by, and neither is anything that
+/// does not begin as a patch file does.
+fn read_start(bytes: &[u8]) -> Start {
+    plan::read_start(bytes).unwrap_or(Start::NoTable)
 }
 
 /// The checksums of the files the patch at `url` starts from. `None` when the server has no
@@ -243,14 +257,17 @@ pub fn sample(url: &str, shelf: &dyn Shelf) -> Result<(u64, f64), Unknown> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use std::cell::RefCell;
     use std::io::Write;
 
     use super::*;
 
+    /// How a patch file begins.
+    const MAGIC: &[u8; 8] = b"WzPatch\x1A";
+
     /// The start of a patch file whose table names `files`, as the engine reads one.
-    pub(crate) fn patch_start(files: &[(&str, u32)]) -> Vec<u8> {
+    fn patch_start(files: &[(&str, u32)]) -> Vec<u8> {
         let mut contents = (files.len() as i32).to_le_bytes().to_vec();
         for (name, crc) in files {
             contents.extend((name.len() as i32).to_le_bytes());
@@ -270,11 +287,11 @@ pub(crate) mod tests {
 
     /// A made-up shelf: the files on it by their addresses, and a note of what was asked.
     #[derive(Default)]
-    pub(crate) struct Shelved {
-        pub(crate) files: BTreeMap<String, Vec<u8>>,
-        pub(crate) asked: RefCell<Vec<String>>,
+    struct Shelved {
+        files: BTreeMap<String, Vec<u8>>,
+        asked: RefCell<Vec<String>>,
         /// Every request from this one on is not answered.
-        pub(crate) down_after: Option<usize>,
+        down_after: Option<usize>,
     }
 
     impl Shelved {
@@ -294,6 +311,11 @@ pub(crate) mod tests {
         fn start_of(&self, url: &str, len: u64) -> Result<Option<Vec<u8>>, Unknown> {
             self.answer(format!("start {url}"))?;
             Ok(self.files.get(url).map(|file| file[..file.len().min(len as usize)].to_vec()))
+        }
+
+        fn round_trip(&self, url: &str) -> Result<f64, Unknown> {
+            self.answer(format!("round trip {url}"))?;
+            Ok(12.0)
         }
     }
 
@@ -463,5 +485,46 @@ pub(crate) mod tests {
         assert_eq!(bytes, 1000);
         assert!(seconds >= 0.0);
         assert_eq!(sample("https://example.invalid/b.patch", &shelf), Err(Unknown::NoAnswer));
+    }
+
+    #[test]
+    fn server_of_an_address_is_its_name_and_the_port_its_scheme_goes_to() {
+        assert_eq!(host_of(&LIVE.patch_url(421, 422)), Some(("maplestory.dn.nexoncdn.co.kr", 443)));
+        assert_eq!(host_of("http://example.invalid/a.patch"), Some(("example.invalid", 80)));
+        assert_eq!(host_of("https://example.invalid:8443/a.patch?x=1"), Some(("example.invalid", 8443)));
+        assert_eq!(host_of("https://example.invalid"), Some(("example.invalid", 443)));
+        for wrong in ["example.invalid/a.patch", "ftp://example.invalid/a", "https:///a.patch", "https://:443/a"] {
+            assert_eq!(host_of(wrong), None, "{wrong}");
+        }
+        assert_eq!(host_of("https://example.invalid:port/a.patch"), None);
+        assert_eq!(host_of("https://someone@example.invalid/a.patch"), None);
+    }
+
+    /// The way to a server is timed by opening connections to it. Here the server is a
+    /// socket of this PC that listens on an address only this PC reaches: no network.
+    #[test]
+    fn way_to_a_server_is_timed_by_the_quickest_of_a_few_connections() {
+        let listening = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listening.local_addr().unwrap();
+        let took = quickest_connect(&[address], 3, Duration::from_secs(2)).expect("no connection was opened");
+        assert!((0.0..2000.0).contains(&took), "{took}");
+        // Three were opened, and each was closed again.
+        listening.set_nonblocking(true).unwrap();
+        let mut opened = 0;
+        let waited = Instant::now();
+        while opened < 3 && waited.elapsed() < Duration::from_secs(2) {
+            match listening.accept() {
+                Ok(_) => opened += 1,
+                Err(_) => std::thread::sleep(Duration::from_millis(5)),
+            }
+        }
+        assert_eq!((opened, listening.accept().is_err()), (3, true));
+        // Nothing listens there any more: no connection, and no more waiting than one try
+        // is given, however many tries were asked for.
+        drop(listening);
+        let began = Instant::now();
+        assert_eq!(quickest_connect(&[address], 3, Duration::from_millis(300)), Err(Unknown::NoConnection));
+        assert!(began.elapsed() < Duration::from_millis(1500), "{:?}", began.elapsed());
+        assert_eq!(quickest_connect(&[], 3, Duration::from_secs(2)), Err(Unknown::NoConnection));
     }
 }

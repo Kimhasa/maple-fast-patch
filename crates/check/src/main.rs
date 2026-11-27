@@ -2,19 +2,29 @@
 //! and runs from a double click or from a stick.
 //!
 //!     mfp-check [--folder <install-dir>] [--server live|test]
-//!               [--full yes|no] [--write-probe yes|no] [--reads yes|no]
+//!               [--checksums yes|no] [--full yes|no] [--write-probe yes|no]
+//!               [--write-limit yes|no] [--write-limit-on <drive>] [--reads yes|no]
 //!               [--no-write-test] [--offline] [--probe-mb <megabytes>] [--table <file>]
 //!               [--copy] [--save] [--no-wait]
 //!
-//! Without arguments it finds the game, asks before the steps that take long or write,
-//! prints the report, and then offers to copy it or to save it beside the program.
+//! Without arguments it finds the game, looks at what can be told in a few seconds, asks
+//! before each step that takes long or writes, prints the report, and then offers to copy
+//! it or to save it beside the program.
 //!
 //! - `--folder` names the install folder. Nothing is looked for then: not where the
 //!   registry says, not in the usual place, not on the drives.
-//! - `--full`, `--write-probe` and `--reads` answer the three questions beforehand: the
-//!   full comparison, the write probe, and reading while the game runs.
+//! - `--checksums`, `--full`, `--write-probe` and `--write-limit` answer the four
+//!   questions beforehand: reading the files up to 64 MB to compare their checksums,
+//!   reading every file, the write probe, and the write limit test (which writes as much
+//!   as a main patch does). `--reads no` leaves out everything that reads the game's
+//!   files while the game runs.
+//! - `--write-limit-on` names the volume the write limit test is run on, where that is
+//!   not to be the game's drive.
+//! - `--write-limit-mb` and `--write-limit-step-mb` make the write limit test write less
+//!   and in smaller files. They are for trying the test out: a test of less than a main
+//!   patch writes decides nothing.
 //! - `--no-write-test` leaves out the empty file, `--offline` leaves out Nexon's server,
-//!   `--probe-mb` sets the size of the probe file.
+//!   `--probe-mb` sets how much the write probe writes on each volume.
 //! - `--table` names a table of known file states to go by in place of the one built in:
 //!   one that the `known_files` program of `mfp-tools` made after a newer patch.
 //! - `--copy` and `--save` copy and save the report without asking, and `--no-wait` ends
@@ -44,6 +54,7 @@ mod console {
     use mfp_check::facts::{Facts, Unknown, Wrote};
     use mfp_check::known::Table;
     use mfp_check::privacy::Scrub;
+    use mfp_check::report::Head;
     use mfp_check::{deliver, report};
     use mfp_kms::Server;
 
@@ -53,17 +64,22 @@ mod console {
     static TIDY: AtomicBool = AtomicBool::new(true);
 
     /// What `--help` prints.
-    const USAGE: &str = "Maple Fast Patch 진단
+    const USAGE: &str = "Maple Fast Patch 검사
 사용법: mfp-check [옵션]
   --folder <경로>        설치 폴더 지정(자동으로 찾지 않음)
   --server live|test     본섭 또는 테섭 지정
-  --full yes|no          전체 대조(게임 파일 전체 읽기)
-  --write-probe yes|no   쓰기 위치 확인(설치 폴더에 임시 파일 512 MB 쓰기)
-  --reads yes|no         게임 실행 중 읽기 측정·파일 대조
-  --no-write-test        쓰기 시험 생략
+  --checksums yes|no     파일 내용 비교, 일부(64 MB 이하 게임 파일 읽기)
+  --full yes|no          파일 내용 비교, 전체(게임 파일 전체 읽기)
+  --write-probe yes|no   쓰기 검사(고정 볼륨마다 임시 파일 1 GB 쓰기)
+  --write-limit yes|no   한도 검사(본 패치만큼 약 36.5 GB 쓰기)
+  --write-limit-on <드라이브>  한도 검사를 할 볼륨(기본은 게임 드라이브)
+  --reads no             게임 실행 중에는 읽기 속도 측정·파일 내용 비교 생략
+  --no-write-test        설치 폴더 쓰기 확인 생략
   --offline              넥슨 패치 서버 확인 생략
-  --probe-mb <MB>        쓰기 위치 확인에 쓰는 임시 파일 크기
-  --table <파일>         내장 표 대신 사용할 파일 상태 표
+  --probe-mb <MB>        쓰기 검사에서 볼륨마다 쓰는 양
+  --write-limit-mb <MB>  한도 검사에서 쓰는 양(시험용)
+  --write-limit-step-mb <MB>  한도 검사의 파일 하나 크기(시험용)
+  --table <파일>         내장 목록 대신 사용할 파일 목록
   --copy                 결과를 클립보드에 복사
   --save                 결과를 실행 파일 폴더에 저장
   --no-wait              끝나면 바로 종료";
@@ -95,8 +111,32 @@ mod console {
                     options.server =
                         Some(Server::from_key(&key).ok_or(format!("{key}: live 또는 test로 입력해 주세요."))?);
                 }
+                "--checksums" => options.checksums = choice(value("yes 또는 no")?)?,
                 "--full" => options.full = choice(value("yes 또는 no")?)?,
+                "--write-limit-on" => {
+                    // A drive letter, with or without what follows it: `d`, `D:`, `D:\`.
+                    let named = value("드라이브")?;
+                    let letter = named.trim_end_matches('\\').trim_end_matches(':');
+                    let mut letters = letter.chars();
+                    match (letters.next(), letters.next()) {
+                        (Some(letter), None) if letter.is_ascii_alphabetic() => {
+                            options.limit_on = Some(format!("{}:", letter.to_ascii_uppercase()));
+                        }
+                        _ => return Err(format!("{named}: 드라이브 문자로 입력해 주세요. (예: D:)")),
+                    }
+                }
                 "--write-probe" => options.write_probe = choice(value("yes 또는 no")?)?,
+                "--write-limit" => options.write_limit = choice(value("yes 또는 no")?)?,
+                "--write-limit-mb" | "--write-limit-step-mb" => {
+                    let megabytes: u64 = value("크기")?.parse().map_err(|_| format!("{arg}: 숫자로 입력해 주세요."))?;
+                    // From one megabyte to a hundred gigabytes.
+                    let bytes = megabytes.clamp(1, 100 << 10) << 20;
+                    if arg == "--write-limit-mb" {
+                        options.limit_bytes = bytes;
+                    } else {
+                        options.limit_step = bytes;
+                    }
+                }
                 "--reads" => options.heavy_reads = choice(value("yes 또는 no")?)?,
                 "--no-write-test" => options.write_test = false,
                 "--offline" => options.online = false,
@@ -173,6 +213,22 @@ mod console {
         fn answer(&mut self, question: &str) -> Option<String> {
             self.ask(question).filter(|line| !line.is_empty())
         }
+
+        fn choose(&mut self, question: &str, choices: &[String], default: usize) -> usize {
+            if !self.answers {
+                return default;
+            }
+            eprintln!("{question}");
+            for (at, choice) in choices.iter().enumerate() {
+                eprintln!("  [{}] {choice}", at + 1);
+            }
+            // Anything but one of the numbers is the default, as Enter is.
+            let said = self.ask(&format!("번호 입력 (Enter: {}):", default + 1)).unwrap_or_default();
+            match said.parse::<usize>() {
+                Ok(number) if (1..=choices.len()).contains(&number) => number - 1,
+                _ => default,
+            }
+        }
     }
 
     /// Called by Windows, on a thread of its own, when the user presses Ctrl+C or closes
@@ -199,7 +255,7 @@ mod console {
     fn stay_open_on_a_fault() {
         std::panic::set_hook(Box::new(|fault| {
             let place = fault.location().map_or(String::new(), |at| format!(" ({}:{})", at.file(), at.line()));
-            eprintln!("진단 도구에 문제가 발생했습니다.{place}");
+            eprintln!("검사 도구에 문제가 발생했습니다.{place}");
             if std::io::stdin().is_terminal() {
                 eprintln!("Enter 키를 누르면 종료합니다.");
                 let _ = std::io::stdin().read_line(&mut String::new());
@@ -230,16 +286,16 @@ mod console {
             }
         };
 
-        eprintln!("Maple Fast Patch 진단을 시작합니다.");
+        eprintln!("Maple Fast Patch 검사를 시작합니다.");
         TIDY.store(false, Ordering::SeqCst);
         let (mut facts, scrub) = diagnose::run(&options, &mut console, &STOP);
         TIDY.store(true, Ordering::SeqCst);
         if STOP.load(Ordering::Relaxed) {
-            eprintln!("진단을 중단했습니다.");
+            eprintln!("검사를 중단했습니다.");
             return ExitCode::from(1);
         }
 
-        println!("{}", report::render(&facts, &scrub));
+        println!("{}", report::render(&facts, &scrub, &Head::Check));
         hand_over(&mut facts, &scrub, &console, &after);
         ExitCode::SUCCESS
     }
@@ -282,7 +338,7 @@ mod console {
 
     /// Puts the report onto the clipboard, and says whether it is there.
     fn copy(facts: &Facts, scrub: &Scrub) -> bool {
-        let copied = deliver::copy(&report::render(facts, scrub));
+        let copied = deliver::copy(&report::render(facts, scrub, &Head::Check));
         match copied {
             Ok(()) => eprintln!("클립보드에 복사했습니다."),
             Err(why) => eprintln!("클립보드에 복사하지 못했습니다.{}", failed(why)),
@@ -294,7 +350,7 @@ mod console {
     /// saved, so the file is among what the report lists as written.
     fn save(facts: &mut Facts, scrub: &Scrub) -> bool {
         let Some(folder) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(PathBuf::from)) else {
-            eprintln!("진단 결과를 저장하지 못했습니다.");
+            eprintln!("검사 결과를 저장하지 못했습니다.");
             return false;
         };
         let file_name = deliver::file_name(facts.when);
@@ -302,16 +358,16 @@ mod console {
         if !already {
             facts.wrote.push(Wrote::Report { file_name: file_name.clone() });
         }
-        match deliver::save(&report::render(facts, scrub), &folder, facts.when) {
+        match deliver::save(&report::render(facts, scrub, &Head::Check), &folder, facts.when) {
             Ok(_) => {
-                eprintln!("진단 결과를 저장했습니다. 실행 파일 폴더의 {file_name}");
+                eprintln!("검사 결과를 저장했습니다. 실행 파일 폴더의 {file_name}");
                 true
             }
             Err(why) => {
                 if !already {
                     facts.wrote.pop();
                 }
-                eprintln!("진단 결과를 저장하지 못했습니다.{}", failed(why));
+                eprintln!("검사 결과를 저장하지 못했습니다.{}", failed(why));
                 false
             }
         }
@@ -337,11 +393,15 @@ mod console {
             let (options, after) = read(&[]).unwrap();
             assert_eq!(options, Options::default());
             assert_eq!(
-                (options.full, options.write_probe, options.heavy_reads),
-                (Choice::Ask, Choice::Ask, Choice::Ask)
+                (options.checksums, options.full, options.write_probe, options.write_limit, options.heavy_reads),
+                (Choice::Ask, Choice::Ask, Choice::Ask, Choice::Ask, Choice::Ask)
             );
             assert!(options.write_test && options.online && options.folder.is_none());
-            assert_eq!(options.probe_bytes, 512 << 20);
+            // The probe on every fixed volume, a gigabyte each; the write limit test as much
+            // as a main patch writes, on the game's drive unless another is picked.
+            assert!(options.probe_other_volumes && options.limit_on.is_none());
+            assert_eq!((options.probe_bytes, options.limit_step), (1 << 30, 1 << 30));
+            assert_eq!(options.limit_bytes, 73 << 29);
             assert_eq!(after, After::default());
         }
 
@@ -352,10 +412,20 @@ mod console {
                 r"C:\MapleFastPatchTest\Maple",
                 "--server",
                 "test",
+                "--checksums",
+                "yes",
                 "--full",
                 "yes",
                 "--write-probe",
                 "no",
+                "--write-limit",
+                "yes",
+                "--write-limit-on",
+                "d",
+                "--write-limit-mb",
+                "300",
+                "--write-limit-step-mb",
+                "50",
                 "--reads",
                 "yes",
                 "--no-write-test",
@@ -370,9 +440,11 @@ mod console {
             assert_eq!(options.folder, Some(PathBuf::from(r"C:\MapleFastPatchTest\Maple")));
             assert_eq!(options.server, Some(Server::Test));
             assert_eq!(
-                (options.full, options.write_probe, options.heavy_reads),
-                (Choice::Yes, Choice::No, Choice::Yes)
+                (options.checksums, options.full, options.write_probe, options.heavy_reads),
+                (Choice::Yes, Choice::Yes, Choice::No, Choice::Yes)
             );
+            assert_eq!((options.write_limit, options.limit_on.as_deref()), (Choice::Yes, Some("D:")));
+            assert_eq!((options.limit_bytes, options.limit_step), (300 << 20, 50 << 20));
             assert!(!options.write_test && !options.online);
             assert_eq!(options.probe_bytes, 64 << 20);
             assert_eq!(after, After { copy: true, save: true, no_wait: true });
@@ -385,6 +457,11 @@ mod console {
                 &["--full", "maybe"],
                 &["--server", "both"],
                 &["--probe-mb", "many"],
+                &["--checksums", "some"],
+                &["--write-limit", "full"],
+                &["--write-limit-on", "data"],
+                &["--write-limit-on", ":"],
+                &["--write-limit-mb", "lots"],
                 &["--everything"],
                 &[r"C:\MapleFastPatchTest\Maple"],
             ] {
@@ -393,6 +470,12 @@ mod console {
             // A probe is never larger than four gigabytes, and never nothing.
             assert_eq!(read(&["--probe-mb", "999999"]).unwrap().0.probe_bytes, 4096 << 20);
             assert_eq!(read(&["--probe-mb", "0"]).unwrap().0.probe_bytes, 1 << 20);
+            // The write limit test is never larger than a hundred gigabytes.
+            assert_eq!(read(&["--write-limit-mb", "9999999"]).unwrap().0.limit_bytes, 100 << 30);
+            // A drive is named by its letter, however much of the rest is typed.
+            for named in ["g", "G:", "g:\\"] {
+                assert_eq!(read(&["--write-limit-on", named]).unwrap().0.limit_on.as_deref(), Some("G:"));
+            }
         }
     }
 }

@@ -42,15 +42,23 @@ pub struct State {
 }
 
 impl State {
-    /// The state as it is shown: `1.2.421 (4)`, `1.2.421` for the first minor, and
-    /// `1.2.420 (마지막 마이너)`.
+    /// The state as it is shown, the way Nexon's notices write a version:
+    /// `Ver 1.2.421 마이너버전(4)`, `Ver 1.2.421` for the first minor, and
+    /// `Ver 1.2.420 (마지막 마이너)`.
     pub fn label(&self, client: &Client) -> String {
-        let version = client.version_label(self.version);
+        let version = format!("Ver {}", client.version_label(self.version));
         match self.minor {
             0 => format!("{version} (마지막 마이너)"),
             1 => version,
-            minor => format!("{version} ({minor})"),
+            minor => format!("{version} 마이너버전({minor})"),
         }
+    }
+
+    /// The state a line of the game's own patcher names: `00421_04` is minor 4 of version
+    /// 421.
+    pub fn logged(log: &str) -> Option<State> {
+        let (version, minor) = log.split_once('_')?;
+        Some(State { version: version.parse().ok()?, minor: minor.parse().ok()? })
     }
 
     /// Where the state stands in time among the states of one client. The last minor of a
@@ -318,10 +326,10 @@ mod tests {
     #[test]
     fn states_are_shown_as_nexon_writes_versions() {
         let (live, test) = (&mfp_kms::LIVE, &mfp_kms::TEST);
-        assert_eq!(State { version: 421, minor: 4 }.label(live), "1.2.421 (4)");
-        assert_eq!(State { version: 421, minor: 1 }.label(live), "1.2.421");
-        assert_eq!(State { version: 420, minor: 0 }.label(live), "1.2.420 (마지막 마이너)");
-        assert_eq!(State { version: 1208, minor: 2 }.label(test), "1.2.208 (2)");
+        assert_eq!(State { version: 421, minor: 4 }.label(live), "Ver 1.2.421 마이너버전(4)");
+        assert_eq!(State { version: 421, minor: 1 }.label(live), "Ver 1.2.421");
+        assert_eq!(State { version: 420, minor: 0 }.label(live), "Ver 1.2.420 (마지막 마이너)");
+        assert_eq!(State { version: 1208, minor: 2 }.label(test), "Ver 1.2.208 마이너버전(2)");
         // The last minor of a version comes after its numbered ones and before the next version.
         let order = |version, minor| State { version, minor }.order();
         assert!(order(420, 3) < order(420, 0) && order(420, 0) < order(421, 1));

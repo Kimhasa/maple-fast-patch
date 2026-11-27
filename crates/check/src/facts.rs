@@ -26,6 +26,19 @@ pub enum Unknown {
     Skipped,
 }
 
+impl Unknown {
+    /// That a fact could not be read, as the report says it: with the error number or the
+    /// status the reading failed with, where there is one.
+    pub fn label(self) -> String {
+        match self {
+            Unknown::Windows(code) => format!("확인 실패 (오류 {code})"),
+            Unknown::Http(status) => format!("확인 실패 (HTTP {status})"),
+            Unknown::NoConnection => "확인 실패 (연결 실패)".to_owned(),
+            Unknown::NoAnswer | Unknown::Skipped => "확인 실패".to_owned(),
+        }
+    }
+}
+
 /// A fact, or why there is none.
 pub type Fact<T> = Result<T, Unknown>;
 
@@ -71,12 +84,10 @@ pub struct Bus(pub u32);
 
 impl Bus {
     pub const SCSI: Bus = Bus(1);
+    pub const FIBRE_CHANNEL: Bus = Bus(6);
     pub const USB: Bus = Bus(7);
-    pub const RAID: Bus = Bus(8);
     pub const ISCSI: Bus = Bus(9);
     pub const SATA: Bus = Bus(11);
-    pub const VIRTUAL: Bus = Bus(14);
-    pub const FILE_BACKED_VIRTUAL: Bus = Bus(15);
     pub const NVME: Bus = Bus(17);
 
     /// The name the bus goes by.
@@ -201,11 +212,15 @@ pub struct Game {
 /// How fast the game's drive is read.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Reads {
-    /// How much was read in one go, in bytes.
+    /// How much was read in one go, in bytes: as much as came in the time a read is given.
     pub bytes: u64,
     /// Bytes a second the first time, and when the same bytes were read again.
     pub first: f64,
     pub again: f64,
+    /// Bytes a second at which the bytes after those came, which were not read before.
+    /// Only read when the second read was many times faster than the first, to tell a
+    /// drive that keeps what it fetched from one that was held up the first time.
+    pub fresh: Option<f64>,
     /// The median time of a read at a place far from the last one, in milliseconds.
     pub seek_ms: Option<f64>,
 }
@@ -222,6 +237,9 @@ pub struct Shelf {
     pub patch_is_next_main: bool,
     /// Bytes fetched for the measurement of the line, and the seconds that took.
     pub sample: Fact<(u64, f64)>,
+    /// The milliseconds a connection to the server takes to open: there and back once.
+    /// The quickest of a few, with the looking up of the server's name left out.
+    pub round_trip: Fact<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,6 +253,10 @@ pub struct PatchOnShelf {
 /// What the comparison of the folder's files came to.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Comparison {
+    /// No file was read: the files were held against the table by whether they are there
+    /// and how long they are, and the state is told by that and by the version the game's
+    /// own patcher logged last.
+    pub by_length: bool,
     /// The state the folder is at: the newest of those it fits.
     pub at: Option<State>,
     /// The states that fit, when more than one does and a file that would tell them apart
@@ -262,6 +284,86 @@ pub enum Asked<T> {
     NotPossible,
 }
 
+/// The room the patch that is waiting needs on the game's drive, in bytes, for each of the
+/// two ways the engine applies one: as `mfp_engine::run::room_needed` works it out from
+/// the patch file. The diagnostic has no patch file and cannot know these; whoever has one
+/// hands them in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Room {
+    /// The usual way, which builds every new file before it puts any in place.
+    pub safe: u64,
+    /// The immediate way, which puts new files in place as it goes and cannot be undone.
+    pub immediate: u64,
+}
+
+/// How the write limit test ended: the step that writes as much as a main patch does.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WriteLimit {
+    Done(Landing),
+    /// The user said no, or was not there to say yes.
+    Declined,
+    /// The volume it was to be run on has less free than the test writes and leaves:
+    /// `free` is what it has (if that could be read), `writes` what the test would write,
+    /// `floor` what it leaves.
+    NoRoom {
+        volume: String,
+        free: Option<u64>,
+        writes: u64,
+        floor: u64,
+    },
+    /// The volume it was to be run on took no write, with this Windows error number, or
+    /// (without one) is none of the fixed volumes of the PC that can be written to.
+    NoPlace {
+        volume: String,
+        error: Option<i32>,
+    },
+    /// Less memory is available than the test wants there to be before it begins:
+    /// `available` is what there is (if that could be read), `wanted` what it wants.
+    NoMemory {
+        available: Option<u64>,
+        wanted: u64,
+    },
+    /// There was nothing to do it on.
+    NotPossible,
+}
+
+/// The folder the diagnostic makes for its files on a volume that has no install folder.
+pub const OWN_FOLDER: &str = "mfp-check-tmp";
+/// What the write limit test leaves free on the drive it writes to, and on any other that
+/// goes down with what it writes: it stops before a step that would leave less. Enough for
+/// Windows and whatever else runs to go on writing while the test holds its files.
+pub const LIMIT_FLOOR: u64 = 4 << 30;
+/// What the write limit test leaves of memory, where memory goes down with what it writes:
+/// it stops before a step that would leave less. A seat that keeps its writes in memory is
+/// then found out without being brought down.
+pub const MEMORY_FLOOR: u64 = 4 << 30;
+/// What the write limit test leaves of memory where the write probe has shown that memory
+/// is not where the PC keeps what it writes: what the PC needs to go on, and no more. The
+/// test itself takes a few megabytes.
+pub const MEMORY_OWN: u64 = 1 << 30;
+
+/// Where on a volume the diagnostic wrote its files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Place {
+    /// In the install folder.
+    Install,
+    /// In a folder of its own under the root of the volume.
+    Root,
+    /// In a folder of its own under the folder Windows keeps temporary files in, where
+    /// the root of the volume took no folder.
+    Temp,
+}
+
+/// The write probe on one volume other than the game's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Probed {
+    /// The volume, `D:`.
+    pub volume: String,
+    /// What the probe found, or the Windows error number with which the volume took no
+    /// write.
+    pub landing: Result<Landing, Option<i32>>,
+}
+
 /// What became of the empty file that was made and removed in the install folder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteTest {
@@ -282,12 +384,51 @@ pub struct Moved {
     pub before: Option<u64>,
     pub after_write: Option<u64>,
     pub after_delete: Option<u64>,
+    /// Once more some seconds later, as memory is. `None` when nothing was written.
+    pub later: Option<u64>,
 }
 
-/// What the write probe found: where a large write to the install folder shows up.
+/// What was read off the PC after one step of a write: a part of what was to be written,
+/// made safe on the drive before the next part began.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Step {
+    /// Bytes this step wrote, and the seconds that took, flush included.
+    pub bytes: u64,
+    pub seconds: f64,
+    /// What each watched volume had free after the step, in the order of
+    /// [`Landing::volumes`].
+    pub free: Vec<Option<u64>>,
+    pub memory: Option<Memory>,
+}
+
+/// Why the diagnostic ended a write before all of it was written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Halt {
+    /// The next step would have left the drive written to with less free than it was told
+    /// to leave.
+    Drive,
+    /// Another volume than the one written to went down with what was written, and the
+    /// next step would have left that one with less free than was to be left: the PC keeps
+    /// what it writes there.
+    Elsewhere,
+    /// Memory went down with what was written, and the next step would have left less of
+    /// it than was to be left: the PC keeps what it writes in memory.
+    Memory,
+    /// Two steps in a row were written at a small part of the speed of the steps before:
+    /// whatever took the writes until then has stopped taking them.
+    Slow,
+    /// A step took longer than a step may.
+    TimedOut,
+}
+
+/// What a write onto a volume found: where what is written shows up, and how far the
+/// writing got. The write probe makes one of these out of one step of 512 MB, and the write
+/// limit test one out of as many steps of 1 GB as a main patch writes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Landing {
-    /// Bytes that were written before the probe ended.
+    /// Where on the volume the files were written.
+    pub place: Place,
+    /// Bytes that were written before the writing ended.
     pub written: u64,
     /// Bytes that were to be written.
     pub wanted: u64,
@@ -295,11 +436,43 @@ pub struct Landing {
     pub seconds: f64,
     /// Why the writing ended early, as a Windows error number.
     pub error: Option<i32>,
+    /// The writing was ended early by the diagnostic itself, and why.
+    pub halted: Option<Halt>,
+    /// Every step that was written, in order. The last may be shorter than the others.
+    pub steps: Vec<Step>,
     pub volumes: Vec<Moved>,
-    /// Memory that was free before the write, after it and after the file was deleted.
-    pub memory: [Option<u64>; 3],
-    /// The probe file is gone again.
+    /// What Windows said of its memory before the write, after it, after the file was
+    /// deleted, and once more some seconds later.
+    pub memory: [Option<Memory>; 4],
+    /// The seconds between the reading after the delete and the last one.
+    pub waited: f64,
+    /// The files are gone again, and with them the folder that was made for them.
     pub deleted: bool,
+}
+
+impl Landing {
+    /// The volume that was written to, `D:`.
+    pub fn written_to(&self) -> Option<&str> {
+        self.volumes.iter().find(|volume| volume.written_to).map(|volume| volume.letter.as_str())
+    }
+}
+
+/// What Windows says of its memory at one moment, in bytes.
+///
+/// What is available counts memory that holds parts of files Windows has read or written
+/// and can hand out again at once. So a file that is written through Windows and then made
+/// safe on its drive takes nothing from it, and memory that is gone from it is memory
+/// something has really taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Memory {
+    /// What programs can still have.
+    pub available: u64,
+    /// What holds parts of files and of Windows itself: Windows calls it the system cache.
+    pub cache: u64,
+    /// What drivers and Windows hold that is never moved out of memory.
+    pub nonpaged: u64,
+    /// What has been promised to programs and drivers in all.
+    pub commit: u64,
 }
 
 /// The names of running programs and drivers that matter, and of nothing else.
@@ -311,6 +484,15 @@ pub struct Programs {
     pub restore: Vec<String>,
     /// Programs a PC room manages its seats with.
     pub seat: Vec<String>,
+    /// The port driver of Windows' own iSCSI initiator, when it is loaded: it is how a PC
+    /// reaches a disk that another computer hands it over the network.
+    pub iscsi: Vec<String>,
+    /// The driver of a product that hands a seat its disks over the network, when it is
+    /// loaded.
+    pub netdisk: Vec<String>,
+    /// Storage drivers that come with Windows for adapters of servers, when they are
+    /// loaded. An ordinary PC has none of these adapters and loads none of the drivers.
+    pub spare: Vec<String>,
     /// Names that hold a word few other programs hold: these may be such programs.
     pub hints: Vec<String>,
     /// Names that hold a word such programs tend to hold and many others do too, and names
@@ -327,7 +509,12 @@ pub enum Wrote {
     EmptyFile { removed: bool },
     /// The probe file in the install folder, of this many bytes.
     ProbeFile { bytes: u64, removed: bool },
-    /// Files an earlier run of the diagnostic left in the install folder, removed now.
+    /// The files of the write limit test in the install folder, of this many bytes in all.
+    LimitFiles { bytes: u64, removed: bool },
+    /// A folder of the diagnostic's own on another volume than the game's, with files of
+    /// this many bytes in all: the write probe's, or (`limit`) the write limit test's.
+    OwnFolder { volume: String, place: Place, bytes: u64, limit: bool, removed: bool },
+    /// Files and folders an earlier run of the diagnostic left, removed now.
     Leftovers { removed: usize, left: usize },
     /// The report, saved beside the program.
     Report { file_name: String },
@@ -347,6 +534,7 @@ impl Facts {
         Facts {
             tool_version: env!("CARGO_PKG_VERSION"),
             when,
+            took: (0.0, 0.0),
             tables: [Server::Live, Server::Test].map(|server| crate::known::Table::built_in(server).newest()),
             table_given: false,
             started_from: Err(Unknown::Skipped),
@@ -364,13 +552,18 @@ impl Facts {
             install: None,
             registry: Registry::default(),
             game_drive: Err(Unknown::Skipped),
+            room: None,
+            other_volumes: Vec::new(),
             game: None,
             reads: Err(Unknown::Skipped),
             shelf: Err(Unknown::Skipped),
+            sizes: Err(Unknown::Skipped),
             quick: Err(Unknown::Skipped),
             full: Asked::NotPossible,
             write_test: WriteTest::Skipped,
             landing: Asked::NotPossible,
+            other_landings: Vec::new(),
+            limit: WriteLimit::NotPossible,
             programs: Err(Unknown::Skipped),
             drivers_listed: Err(Unknown::Skipped),
             wrote: Vec::new(),
@@ -385,6 +578,9 @@ pub struct Facts {
     /// The version of the diagnostic, and when it ran, in seconds since 1970.
     pub tool_version: &'static str,
     pub when: u64,
+    /// The seconds the run took that asks nothing, and the seconds all of it took, the
+    /// steps that were asked for included. Neither counts the waiting for an answer.
+    pub took: (f64, f64),
     /// The newest state each table of known file states knows, for the live client and the
     /// test world.
     pub tables: [State; 2],
@@ -408,13 +604,27 @@ pub struct Facts {
     pub install: Option<PathBuf>,
     pub registry: Registry,
     pub game_drive: Fact<Volume>,
+    /// What the patch that is waiting needs of the game's drive, where the caller knows.
+    pub room: Option<Room>,
+    /// Every other fixed volume of the PC. One of them may be where a seat keeps what it
+    /// writes.
+    pub other_volumes: Vec<Volume>,
     pub game: Option<Game>,
     pub reads: Fact<Reads>,
     pub shelf: Fact<Shelf>,
+    /// The files held against the table by whether they are there and how long they are,
+    /// with none of them read: what a run that asks nothing finds out.
+    pub sizes: Fact<Comparison>,
+    /// The files up to 64 MB read and held against the table by their checksums, when that
+    /// was asked for.
     pub quick: Fact<Comparison>,
     pub full: Asked<Comparison>,
     pub write_test: WriteTest,
+    /// The write probe in the install folder, and on every other fixed volume when it was
+    /// run there too.
     pub landing: Asked<Landing>,
+    pub other_landings: Vec<Probed>,
+    pub limit: WriteLimit,
     pub programs: Fact<Programs>,
     pub drivers_listed: Fact<()>,
     pub wrote: Vec<Wrote>,
