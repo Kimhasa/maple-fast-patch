@@ -1,7 +1,6 @@
 # Frontend
 node_modules
 /build
-vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .env
 .env.*
