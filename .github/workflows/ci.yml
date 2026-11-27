@@ -11,11 +11,19 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+  # Nothing is debugged here: without debug information the build is quicker and what is
+  # kept of it for the next run is smaller.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+# The jobs run side by side. Each of them that builds Rust keeps what it built for the next
+# run, under a name of its own, whether or not it passed.
 jobs:
-  check:
-    name: 검사와 테스트
-    runs-on: windows-latest
-    timeout-minutes: 60
+  page:
+    name: 화면 빌드
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -24,24 +32,92 @@ jobs:
           node-version: 24
           cache: yarn
 
+      - name: 화면 의존성 설치
+        run: yarn install --frozen-lockfile
+
+      - name: 화면 빌드
+        run: yarn build
+
+  lint:
+    name: 형식과 린트
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
 
+      # Asked first: it needs nothing built, and says no within seconds.
+      - name: 형식 확인
+        run: cargo fmt --all -- --check
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: yarn
+
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: 화면 의존성 설치
         run: yarn install --frozen-lockfile
 
-      # The app's build embeds the page, so the page is built before any cargo step.
+      # The app's build embeds the page, so the page is built before the app is.
       - name: 화면 빌드
         run: yarn build
 
-      - name: 형식 확인
-        run: cargo fmt --all -- --check
-
       - name: 린트
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+  test:
+    name: 테스트 (${{ matrix.name }})
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      # One part failing does not stop the others: all of what fails is seen in one run.
+      fail-fast: false
+      matrix:
+        include:
+          - id: app
+            name: 앱
+            packages: -p maple-fast-patch
+            page: true
+          - id: engine
+            name: 엔진
+            packages: -p mfp-engine
+          - id: check
+            name: 검사
+            packages: -p mfp-check
+          - id: kms-tools
+            name: 넥슨 연동과 도구
+            packages: -p mfp-kms -p mfp-tools
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.id }}
+          cache-on-failure: true
+
+      # Only the app embeds the page; the other parts are built without it.
+      - uses: actions/setup-node@v4
+        if: matrix.page
+        with:
+          node-version: 24
+          cache: yarn
+
+      - name: 화면 의존성 설치
+        if: matrix.page
+        run: yarn install --frozen-lockfile
+
+      - name: 화면 빌드
+        if: matrix.page
+        run: yarn build
 
       - name: 테스트
-        run: cargo test --workspace
+        run: cargo test --locked ${{ matrix.packages }}
