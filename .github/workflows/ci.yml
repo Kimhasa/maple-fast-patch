@@ -38,6 +38,15 @@ jobs:
       - name: 화면 빌드
         run: yarn build
 
+      # The engine's tests are spread over several jobs by name (see `test`). A test file
+      # that is in none of them would never be run, so that is asked here.
+      - name: 엔진 테스트 파일이 모두 나뉘어 있는지 확인
+        run: |
+          for file in crates/engine/tests/*.rs; do
+            name=$(basename "$file" .rs)
+            grep -q -w -e "--test $name" .github/workflows/ci.yml || { echo "::error::$name is in no test job"; exit 1; }
+          done
+
   lint:
     name: 형식과 린트
     runs-on: windows-latest
@@ -83,16 +92,35 @@ jobs:
         include:
           - id: app
             name: 앱
+            cache: app
             packages: -p maple-fast-patch
             page: true
-          - id: engine
-            name: 엔진
-            packages: -p mfp-engine
+          # The engine's tests run whole patches and take minutes, so they are four jobs,
+          # about as long as one another. They build the same things and keep them as one.
+          - id: engine-immediate
+            name: 엔진 · immediate
+            cache: engine
+            packages: -p mfp-engine --test immediate
+          - id: engine-hardening
+            name: 엔진 · hardening, container, patching, 단위
+            cache: engine
+            packages: -p mfp-engine --lib --test hardening --test container --test patching
+            docs: -p mfp-engine
+          - id: engine-hostile
+            name: 엔진 · hostile_folder, attacks
+            cache: engine
+            packages: -p mfp-engine --test hostile_folder --test attacks
+          - id: engine-download
+            name: 엔진 · download, rebuild
+            cache: engine
+            packages: -p mfp-engine --test download --test rebuild
           - id: check
             name: 검사
+            cache: check
             packages: -p mfp-check
           - id: kms-tools
             name: 넥슨 연동과 도구
+            cache: kms-tools
             packages: -p mfp-kms -p mfp-tools
     steps:
       - uses: actions/checkout@v4
@@ -101,7 +129,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.id }}
+          key: ${{ matrix.cache }}
           cache-on-failure: true
 
       # Only the app embeds the page; the other parts are built without it.
@@ -121,3 +149,8 @@ jobs:
 
       - name: 테스트
         run: cargo test --locked ${{ matrix.packages }}
+
+      # The examples in the documentation are tests of their own, and are asked for apart.
+      - name: 문서 예제 테스트
+        if: matrix.docs
+        run: cargo test --locked ${{ matrix.docs }} --doc
