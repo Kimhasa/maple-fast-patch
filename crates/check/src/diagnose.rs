@@ -1956,13 +1956,10 @@ mod tests {
         assert_eq!((&facts.full, &facts.landing), (&Asked::Declined, &Asked::Declined));
         assert_eq!((&facts.limit, &facts.quick), (&WriteLimit::Declined, &Err(Unknown::Skipped)));
         assert!(facts.other_landings.is_empty());
-        // Each step that reads much or writes was asked for by itself, in this order.
-        let steps = [
-            "파일 내용 비교 (일부): ",
-            "파일 내용 비교 (전체): ",
-            "쓰기 검사: 설치 폴더에 ",
-            "한도 검사: 설치 폴더에 ",
-        ];
+        // Each step that reads much or writes was asked for by itself, in this order. Where
+        // the limit test writes is asked next on a PC with several volumes, so its question
+        // names the install folder only on a PC with one.
+        let steps = ["파일 내용 비교 (일부): ", "파일 내용 비교 (전체): ", "쓰기 검사: 설치 폴더에 ", "한도 검사: "];
         let asked: Vec<&String> =
             desk.asked.iter().filter(|question| steps.iter().any(|step| question.starts_with(step))).collect();
         assert_eq!(asked.len(), 4, "{:?}", desk.asked);
@@ -2648,7 +2645,12 @@ mod tests {
     fn without_cost(question: &str) -> String {
         let Some(from) = question.find(" 이 PC의 ") else { return question.to_owned() };
         let cost = &question[from..];
-        let until = cost.find("약 ").and_then(|about| cost[about..].find('.').map(|end| about + end + 1));
+        // The time ends at the full stop of its sentence, which no digit follows: the point
+        // in `0.1초` is none.
+        let ends = |at: usize| !cost[at + 1..].starts_with(|next: char| next.is_ascii_digit());
+        let until = cost.find("약 ").and_then(|about| {
+            cost[about..].match_indices('.').map(|(at, _)| about + at).find(|at| ends(*at)).map(|at| at + 1)
+        });
         format!("{}{}", &question[..from], until.map_or("", |until| &cost[until..]))
     }
 
