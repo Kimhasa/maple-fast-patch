@@ -23,8 +23,8 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 The app is drawn in NEXON Lv2 Gothic (Copyright (c) 2019 NEXON, designed by FONTRIX Inc.),
 which NEXON offers for download at https://brand.nexon.com/brand/fonts. The font files are not
 part of this repository and are not covered by this project's MIT license. A build finds them
-in `public/fonts` (`NEXON-Lv2-Gothic-Light.woff`, `NEXON-Lv2-Gothic.woff`,
-`NEXON-Lv2-Gothic-Bold.woff`); without them the app falls back to Malgun Gothic.
+in `public/fonts` (`NEXON-Lv2-Gothic.woff`, `NEXON-Lv2-Gothic-Bold.woff`); without them the app
+falls back to Malgun Gothic.
 
 ## Lucide
 
