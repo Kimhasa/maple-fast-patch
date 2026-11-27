@@ -3,7 +3,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use mfp_kms::notice::Minutes;
+use mfp_kms::notice::{Minutes, civil_from_days};
 
 /// The weekdays as Nexon abbreviates them in a notice, beginning with the weekday of the
 /// first day of 1970.
@@ -18,18 +18,10 @@ pub struct Day {
     pub weekday: &'static str,
 }
 
-/// The day a moment lies in. (Howard Hinnant's `civil_from_days`.)
+/// The day a moment lies in.
 pub fn day_of(at: Minutes) -> Day {
     let since_1970 = at.div_euclid(1440);
-    let days = since_1970 + 719_468;
-    let era = days.div_euclid(146_097);
-    let day_of_era = days.rem_euclid(146_097);
-    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted_month = (5 * day_of_year + 2) / 153;
-    let day = (day_of_year - (153 * shifted_month + 2) / 5 + 1) as u32;
-    let month = if shifted_month < 10 { shifted_month + 3 } else { shifted_month - 9 } as u32;
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    let (year, month, day) = civil_from_days(since_1970);
     Day { year, month, day, weekday: WEEKDAYS[since_1970.rem_euclid(7) as usize] }
 }
 

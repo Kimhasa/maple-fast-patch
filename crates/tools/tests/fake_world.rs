@@ -207,6 +207,37 @@ fn served_tree_answers_what_the_downloader_asks() {
 }
 
 #[test]
+fn served_pages_answer_the_small_reads_of_the_app() {
+    let dir = tempfile::tempdir().unwrap();
+    make(dir.path(), Server::Live, 1);
+    let address = fake_server::serve(dir.path().to_path_buf(), 0, None, Arc::new(|_| {})).unwrap();
+    let text = |file: &str| fs::read_to_string(dir.path().join(file)).unwrap();
+
+    // The inspection service is asked with the envelope Nexon's is asked with, and answers
+    // with what its file holds. The made-up server states no time.
+    let service = mfp_kms::LIVE.maintenance().inspection.as_ref().expect("the live game has an inspection service");
+    let url = format!("http://{address}/inspection");
+    let answer = download::soap(&url, service.action, service.request, 1 << 20).unwrap();
+    assert_eq!(answer, download::Dated { text: text(INSPECTION_FILE), date: None });
+
+    // A board is read as a page, and as an answer with its status and the path it came from.
+    let (url, board) = (format!("http://{address}/board?page=1"), text(BOARD_FILE));
+    assert_eq!(download::page(&url, 1 << 20).unwrap(), board);
+    let expected = download::Answer { status: 200, path: "/board".to_owned(), text: board.clone(), date: None };
+    assert_eq!(download::page_answer(&url, 1 << 20).unwrap(), expected);
+    // No more of it is read than was asked for.
+    assert_eq!(download::page(&url, 10).unwrap(), String::from_utf8_lossy(&board.as_bytes()[..10]));
+
+    // An address with nothing under it is no page, and is an answer all the same.
+    let nothing = format!("http://{address}/nothing");
+    assert!(matches!(download::page(&nothing, 100), Err(Error::Download { status: Some(403), .. })));
+    let answer = download::page_answer(&nothing, 100).unwrap();
+    assert_eq!((answer.status, answer.path.as_str(), answer.text.as_str()), (403, "/nothing", ""));
+    let refused = download::soap(&nothing, service.action, service.request, 100);
+    assert!(matches!(refused, Err(Error::Download { status: Some(403), .. })), "{refused:?}");
+}
+
+#[test]
 fn patch_files_appear_when_they_are_published_and_a_world_is_only_made_in_an_empty_folder() {
     let dir = tempfile::tempdir().unwrap();
     let world = make(dir.path(), Server::Test, 2);

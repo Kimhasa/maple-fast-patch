@@ -10,9 +10,7 @@
 //! written in a small space, and loses it at the next start). Reads only the patch files.
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 
-use mfp_engine::container::PatchFile;
 use mfp_engine::plan::{self, Header, Op};
 
 /// Drives hand out room in pieces of this size; a piece that is touched at all is written
@@ -40,11 +38,8 @@ struct Tally {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let go = AtomicBool::new(false);
     for path in std::env::args().skip(1).map(PathBuf::from) {
-        let patch = PatchFile::open(&path)?;
-        patch.verify(&go, |_| {})?;
-        let plan = plan::scan(&patch, &go)?;
+        let (patch, plan) = mfp_tools::read_patch(&path)?;
         let mut tally = Tally::default();
         let (mut stream, layout, _) = plan::open_contents(&patch)?;
         for entry in &plan.entries {

@@ -17,9 +17,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 
-use mfp_engine::container::PatchFile;
 use mfp_engine::crc;
 use mfp_engine::plan::{self, Header};
 use mfp_tools::clients;
@@ -51,11 +49,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut written: BTreeMap<String, u64> = BTreeMap::new();
     let mut left_out = 0;
     let mut buffer = vec![0u8; 1 << 20];
-    let go = AtomicBool::new(false);
     for path in &patches {
-        let patch = PatchFile::open(path)?;
-        patch.verify(&go, |_| {})?;
-        let plan = plan::scan(&patch, &go)?;
+        let (patch, plan) = mfp_tools::read_patch(path)?;
         let (mut stream, layout, _) = plan::open_contents(&patch)?;
         for entry in &plan.entries {
             let (name, header) = plan::next_entry(&mut stream, layout, &entry.name)?;

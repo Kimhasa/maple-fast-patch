@@ -1,25 +1,24 @@
 //! Holds the files two patches on the server start from against each other.
 //!
-//!     cargo run --release -p mfp-tools --bin originals -- <scratch-folder> <url-a> <url-b>
+//!     cargo run --release -p mfp-tools --bin originals -- <url-a> <url-b>
 //!
 //! A patch file names, at its very start, the files it was made from and a checksum of each.
 //! Two patches that start from the same version name the same files with the same checksums:
 //! that is what tells whether a patch that skips versions starts where the single step from
-//! its version does. Only the start of each file is fetched, into the scratch folder.
+//! its version does. Only the start of each file is fetched, and it is read in memory:
+//! nothing is written to this PC.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use mfp_engine::detect;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let (Some(scratch), Some(a), Some(b)) = (args.next(), args.next(), args.next()) else {
-        return Err("usage: originals <scratch-folder> <url-a> <url-b>".into());
+    let (Some(a), Some(b)) = (args.next(), args.next()) else {
+        return Err("usage: originals <url-a> <url-b>".into());
     };
-    let scratch = PathBuf::from(scratch);
     let table = |url: &str| -> Result<BTreeMap<String, u32>, Box<dyn std::error::Error>> {
-        Ok(detect::remote_originals(url, &scratch)?.unwrap_or_default())
+        Ok(detect::remote_originals(url)?.unwrap_or_default())
     };
     let (first, second) = (table(&a)?, table(&b)?);
     let name = |url: &str| url.rsplit('/').next().unwrap_or(url).to_owned();

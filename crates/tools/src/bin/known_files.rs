@@ -18,9 +18,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 
-use mfp_engine::container::PatchFile;
 use mfp_engine::plan::{self, Action, Plan};
 use mfp_tools::clients;
 
@@ -66,7 +64,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if patches.is_empty() {
         return Err("missing patch files".into());
     }
-    let go = AtomicBool::new(false);
 
     let mut states: Vec<State> = Vec::new();
     let mut files: BTreeMap<String, History> = BTreeMap::new();
@@ -86,9 +83,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             (None, Some(last)) if last.minor >= 1 => State { version: last.version, minor: last.minor + 1 },
             (None, _) => return Err(format!("{name} is a minor patch, and no main patch comes before it").into()),
         };
-        let patch = PatchFile::open(path)?;
-        patch.verify(&go, |_| {})?;
-        let plan = plan::scan(&patch, &go)?;
+        let (_, plan) = mfp_tools::read_patch(path)?;
         let from = states.len() - 1;
         states.push(to);
         take(&plan, from, &mut files);

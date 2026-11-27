@@ -18,7 +18,6 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
 use mfp_engine::apply;
-use mfp_engine::container::PatchFile;
 use mfp_engine::plan::{self, Action};
 use mfp_engine::preflight::DATA_DIR_NAME;
 use mfp_engine::stage::{self, Checked, Dirs, Fingerprint};
@@ -40,9 +39,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let go = AtomicBool::new(false);
 
-    let patch = PatchFile::open(&patch_path)?;
-    patch.verify(&go, |_| {})?;
-    let plan = plan::scan(&patch, &go)?;
+    let (patch, plan) = mfp_tools::read_patch(&patch_path)?;
 
     if test.exists() {
         fs::remove_dir_all(&test)?;

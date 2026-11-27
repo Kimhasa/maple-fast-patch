@@ -15,9 +15,15 @@
 //!   [`fake_notice`]).
 //! - `fake_launcher` stands in for the game's programs in that world: it writes down that
 //!   it was started.
+//! - `originals` holds the files two patches on the server start from against each other.
+//! - `inplace_size` says how much of the files a patch rebuilds stays where it was.
+//! - `known_files` writes down what the files of a client are after each of a row of
+//!   patches, for the diagnostic program (`mfp-check`) to hold a folder against.
+//! - `whole_files` writes the files that patches bring whole into a folder: part of an
+//!   install, made of real files, to try that diagnostic program on.
 //!
-//! The first four take `--server live|test` for the client they are run for (see
-//! [`clients`]).
+//! `make_test_install`, `prepatch`, `run_patch`, `known_files` and `fake_nexon` take
+//! `--server live|test` for the client they are run for (see [`clients`]).
 
 pub mod calendar;
 pub mod clients;
@@ -34,6 +40,20 @@ mod builder;
 
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
+
+use mfp_engine::container::PatchFile;
+use mfp_engine::plan::{self, Plan};
+
+/// Opens a patch file, checks that it is whole, and reads what it will do: what a program
+/// does first with a patch file it is given.
+pub fn read_patch(path: &Path) -> mfp_engine::Result<(PatchFile, Plan)> {
+    let go = AtomicBool::new(false);
+    let patch = PatchFile::open(path)?;
+    patch.verify(&go, |_| {})?;
+    let plan = plan::scan(&patch, &go)?;
+    Ok((patch, plan))
+}
 
 /// Bytes of all files under `dir`. Each file is asked for its own length: what a folder
 /// lists for a file that is being written lags behind.

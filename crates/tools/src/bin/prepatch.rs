@@ -29,7 +29,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use mfp_engine::container::PatchFile;
 use mfp_engine::immediate;
 use mfp_engine::plan::{self, Action, Plan};
 use mfp_engine::preflight::{LOCK_FILE_NAME, WORK_DIR_NAME};
@@ -50,9 +49,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let go = AtomicBool::new(false);
 
     let started = Instant::now();
-    let patch = PatchFile::open(&patch_path)?;
-    patch.verify(&go, |_| {})?;
-    let plan = plan::scan(&patch, &go)?;
+    let (patch, plan) = mfp_tools::read_patch(&patch_path)?;
     println!(
         "patch read: {} entries, {} originals ({:.1}s)",
         plan.entries.len(),
