@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, LogicalSize, Manager, State, WebviewWindow};
+use tauri::{AppHandle, LogicalSize, Manager, State, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 #[cfg(windows)]
@@ -44,6 +44,10 @@ pub(crate) fn pick_folder(app: &AppHandle) -> Option<PathBuf> {
 /// The size the window is laid out at, in logical pixels: the page is made for it, and the
 /// window is not made smaller than this.
 const LAID_OUT: (f64, f64) = (1128.0, 602.0);
+/// The size the window opens at where none is on record, in logical pixels: a little more
+/// than it is laid out at, for the room that gives the page. It is the size the window is
+/// made at (`tauri.conf.json`).
+const OPENS_AT: (f64, f64) = (1200.0, 650.0);
 /// What is left free on every side of a window that was made smaller to fit its screen.
 const MARGIN: f64 = 8.0;
 /// How long the window has to have stood still before it is fitted to the screen it is on.
@@ -57,7 +61,7 @@ const AT_REST: Duration = Duration::from_millis(250);
 /// high, and a window that cannot be made smaller than it is laid out would hang over its
 /// edge, the one button with it. The window is then made smaller as a whole, by one factor
 /// for its size and for the page in it, so that the page stays as it is laid out.
-pub(crate) fn fit(work: (f64, f64)) -> f64 {
+fn fit(work: (f64, f64)) -> f64 {
     if work.0 >= LAID_OUT.0 && work.1 >= LAID_OUT.1 {
         return 1.0;
     }
@@ -69,18 +73,23 @@ pub(crate) fn fit(work: (f64, f64)) -> f64 {
 /// The smallest size the window takes on a screen it is fitted to by `factor`, in logical
 /// pixels: the size it is laid out at, made smaller as a whole where the screen asks for
 /// that. The user makes the window larger than this by its edges, and never smaller.
-pub(crate) fn smallest(factor: f64) -> (f64, f64) {
+fn smallest(factor: f64) -> (f64, f64) {
     (LAID_OUT.0 * factor, LAID_OUT.1 * factor)
 }
 
 /// The size the window opens at, in logical pixels, on a screen with a work area of `work`
 /// that it is fitted to by `factor`: the size it was `left_at` when the app last ran, no
 /// larger than the screen has room for and no smaller than the window gets there. With
-/// nothing on record it is the smallest size, which is the one it is laid out at.
-pub(crate) fn opens_at(left_at: Option<(u32, u32)>, factor: f64, work: (f64, f64)) -> (f64, f64) {
+/// nothing on record it is the size it is made at ([`OPENS_AT`]), within the same bounds:
+/// on a screen the window had to be made smaller for, that is the smallest size.
+fn opens_at(left_at: Option<(u32, u32)>, factor: f64, work: (f64, f64)) -> (f64, f64) {
     let least = smallest(factor);
-    let Some((width, height)) = left_at else { return least };
-    (f64::from(width).min(work.0).max(least.0), f64::from(height).min(work.1).max(least.1))
+    let (width, height) = match left_at {
+        Some((width, height)) => (f64::from(width), f64::from(height)),
+        None if factor < 1.0 => return least,
+        None => OPENS_AT,
+    };
+    (width.min(work.0).max(least.0), height.min(work.1).max(least.1))
 }
 
 /// The size the window is given once it has come to rest on a screen it is fitted to by
@@ -164,6 +173,41 @@ fn size_window(window: &WebviewWindow, factor: f64, size: (f64, f64)) {
     let _ = window.set_zoom(factor);
 }
 
+/// The folder, inside the one Tauri keeps for the app, in which a copy that runs with
+/// administrator rights has its browser keep its files.
+const WITH_RIGHTS: &str = "elevated";
+
+/// Where the browser inside the window keeps its files, when that is not `usual`, the
+/// folder Tauri has it keep them in: a copy that runs with administrator rights (`elevated`)
+/// keeps them apart.
+///
+/// WebView2 runs one browser for a folder, whichever programs show pages out of it, and a
+/// browser that was started without those rights is not one a program with them can share.
+/// The copy that takes over with them (see [`crate::rights`]) would find the browser of the
+/// copy it replaces still closing in that folder. In a folder of its own it finds nothing.
+fn browser_folder(usual: &Path, elevated: bool) -> Option<PathBuf> {
+    elevated.then(|| usual.join(WITH_RIGHTS))
+}
+
+/// Makes the app's window, hidden: [`open_window`] gives it its size, and it shows when
+/// its page has drawn.
+///
+/// The app makes it itself once its start has come this far, and Tauri does not make it
+/// before that (`create` is off for it in `tauri.conf.json`). A copy that starts itself
+/// again with administrator rights and leaves never comes this far: it has no window that
+/// could show for a moment, and no browser to close behind it.
+pub(crate) fn make_window(app: &AppHandle, elevated: bool) -> tauri::Result<()> {
+    let apart = app.path().app_local_data_dir().ok().and_then(|usual| browser_folder(&usual, elevated));
+    for config in &app.config().app.windows {
+        let mut window = WebviewWindowBuilder::from_config(app, config)?;
+        if let Some(apart) = &apart {
+            window = window.data_directory(apart.clone());
+        }
+        window.build()?;
+    }
+    Ok(())
+}
+
 /// Has the window as it opens: fitted to the screen it is on (see [`fit`]), at the size it
 /// was left at when the app last ran (see [`opens_at`]), in the middle of that screen.
 pub(crate) fn open_window(app: &AppHandle) {
@@ -174,8 +218,9 @@ pub(crate) fn open_window(app: &AppHandle) {
     *fitted.factor.lock().unwrap() = factor;
     // What is on record stays as it is until the window is given another size than this.
     *fitted.kept.lock().unwrap() = Some(whole(size));
-    // The window is made at the size it is laid out at, in the middle of its screen.
-    if (factor - 1.0).abs() < 0.001 && size == LAID_OUT {
+    // The window is made at the size it opens at with nothing on record, in the middle of
+    // its screen.
+    if (factor - 1.0).abs() < 0.001 && size == OPENS_AT {
         return;
     }
     size_window(&window, factor, size);
@@ -322,10 +367,11 @@ fn show_first(app: &AppHandle) {
     }
 }
 
-/// Shows the window, in front: for the first time, or again.
+/// Shows the window, in front: for the first time, or again. An app that is still starting
+/// and has made no window yet has none to show: that one shows when its page has drawn.
 pub(crate) fn bring_back(app: &AppHandle) {
-    SHOWN.store(true, Ordering::SeqCst);
     if let Some(window) = app.get_webview_window("main") {
+        SHOWN.store(true, Ordering::SeqCst);
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -425,6 +471,15 @@ mod tests {
         (pixels.0 * 100.0 / scale, pixels.1 * 100.0 / scale - 48.0)
     }
 
+    /// The browser of a copy with administrator rights is never the one a copy without
+    /// them has running, or has only just left behind: each keeps to a folder of its own.
+    #[test]
+    fn a_copy_with_administrator_rights_keeps_its_browsers_files_apart() {
+        let usual = Path::new("local").join("com.maplefastpatch.app");
+        assert_eq!(browser_folder(&usual, false), None);
+        assert_eq!(browser_folder(&usual, true), Some(usual.join("elevated")));
+    }
+
     #[test]
     fn a_screen_with_room_for_the_window_leaves_it_as_it_is_laid_out() {
         for (pixels, scale) in [
@@ -497,8 +552,19 @@ mod tests {
     #[test]
     fn the_window_opens_at_the_size_it_was_left_at_within_what_its_screen_takes() {
         let full_hd = work_area((1920.0, 1080.0), 100.0);
-        // Nothing on record: as it is laid out.
-        assert_eq!(opens_at(None, 1.0, full_hd), LAID_OUT);
+        // Nothing on record: the size it is made at, a little more than it is laid out at.
+        assert_eq!(opens_at(None, 1.0, full_hd), OPENS_AT);
+        assert!(OPENS_AT.0 >= LAID_OUT.0 && OPENS_AT.1 >= LAID_OUT.1);
+        // That fits the screens there are, the lowest of them with little to spare:
+        // 1920 × 1080 at 150 % is 1280 × 672 above the taskbar.
+        for (pixels, scale) in [((1366.0, 768.0), 100.0), ((1920.0, 1080.0), 125.0), ((1920.0, 1080.0), 150.0)] {
+            let work = work_area(pixels, scale);
+            assert_eq!(opens_at(None, fit(work), work), OPENS_AT, "{pixels:?} at {scale} %");
+        }
+        // On a screen with room for the window as it is laid out and no more, it is no
+        // larger than the screen.
+        assert_eq!(opens_at(None, 1.0, (1150.0, 640.0)), (1150.0, 640.0));
+        assert_eq!(opens_at(None, 1.0, LAID_OUT), LAID_OUT);
         assert_eq!(opens_at(Some((1500, 800)), 1.0, full_hd), (1500.0, 800.0));
         // Never smaller than the smallest size, on either side alone.
         assert_eq!(opens_at(Some((800, 400)), 1.0, full_hd), LAID_OUT);

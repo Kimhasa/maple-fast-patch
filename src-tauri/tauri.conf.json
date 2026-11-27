@@ -12,8 +12,9 @@
     "windows": [
       {
         "title": "Maple Fast Patch",
-        "width": 1128,
-        "height": 602,
+        "create": false,
+        "width": 1200,
+        "height": 650,
         "minWidth": 1128,
         "minHeight": 602,
         "visible": false,
