@@ -55,7 +55,7 @@ impl Clock {
     ///
     /// It is the middle one of the last answers, so that one answer with a wrong time moves
     /// nothing. Of two that is the one nearer to this PC's clock.
-    pub(crate) fn ahead(&self) -> i64 {
+    fn ahead(&self) -> i64 {
         let mut shown: Vec<i64> = self.ahead.iter().copied().collect();
         shown.sort_unstable();
         let ahead = match shown.as_slice() {

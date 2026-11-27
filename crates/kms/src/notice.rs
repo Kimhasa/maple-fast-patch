@@ -403,8 +403,9 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
-/// The date of a number of days since 1970.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
+/// The date of a number of days since 1970: year, month and day. (Howard Hinnant's
+/// `civil_from_days`.)
+pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let days = days + 719_468;
     let era = days.div_euclid(146_097);
     let day_of_era = days.rem_euclid(146_097);

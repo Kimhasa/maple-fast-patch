@@ -128,11 +128,24 @@ impl Client {
     /// uses by default, which only counts when this client's own program is in it: the two
     /// clients must never be taken for each other.
     pub fn find_install_dir(&self) -> Option<PathBuf> {
-        let recorded = self.install_key.and_then(|key| registry_text(key, "RootPath")).map(PathBuf::from);
+        let recorded = self.recorded_install_dir().map(PathBuf::from);
         recorded.filter(|dir| dir.is_dir()).or_else(|| {
             let usual = Path::new(self.usual_dir);
             usual.join(self.game_program).is_file().then(|| usual.to_path_buf())
         })
+    }
+
+    /// What the registry says this client's install folder is, as the text that stands
+    /// there. The folder is not looked at: it may be gone, or hold something else by now.
+    /// `None` where the key is not known, as for the test world, or nothing is recorded.
+    pub fn recorded_install_dir(&self) -> Option<String> {
+        self.install_key.and_then(|key| registry_text(key, "RootPath"))
+    }
+
+    /// The folder the installer puts this client in unless told otherwise. Says nothing
+    /// about this PC.
+    pub fn usual_install_dir(&self) -> &'static str {
+        self.usual_dir
     }
 
     /// A guess at the installed version's number as the patch files count it (`421` for the
@@ -233,7 +246,11 @@ fn registry_number(_: &str, _: &str) -> Option<u32> {
 mod tests {
     use super::*;
 
+    // Looks at this PC: its registry, and the folder a real game is installed in. Run on
+    // demand with `cargo test -p mfp-kms -- --ignored`. It is no part of a default run,
+    // whose result is not to hang on what is installed where it runs.
     #[test]
+    #[ignore = "looks at this PC's registry and the real install folder"]
     fn found_install_dir_is_a_real_folder_with_that_clients_program() {
         // Passes on a PC without the game too: nothing found is a valid answer.
         for server in Server::ALL {
@@ -241,6 +258,11 @@ mod tests {
                 assert!(dir.is_dir(), "{} is not a folder", dir.display());
             }
         }
+    }
+
+    #[test]
+    fn usual_folders_are_those_of_the_two_clients() {
+        assert_eq!((LIVE.usual_install_dir(), TEST.usual_install_dir()), (r"C:\Nexon\Maple", r"C:\Nexon\MapleT"));
     }
 
     #[test]
