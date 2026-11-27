@@ -141,9 +141,13 @@ impl InstallLock {
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_NONE};
             // No sharing: a second open fails for as long as this handle lives, and the
             // system releases it even if the app crashes.
-            options.share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_NONE);
+            options.share_mode(FILE_SHARE_NONE);
+            // A link that stands where the lock file does is opened itself and not followed:
+            // nothing is opened or made where it leads, which may be anywhere on this PC.
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         }
         match options.open(&path) {
             Ok(file) => Ok(InstallLock { path, file: Some(file) }),
