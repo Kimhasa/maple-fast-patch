@@ -271,7 +271,9 @@ pub struct Start<'a> {
 ///   PC with a game running has little to begin with, and its writes go to its disk.
 /// - The last two steps were both written at less than the plan's slowest speed. A step
 ///   at the speed of the wired line is far above that: writes that a seat passes on to
-///   its shop's server are no reason to end.
+///   its shop's server are no reason to end. A step so small that the slowest speed that
+///   passes writes it in under a second is not timed at all: making a file safe on the
+///   drive takes its time whatever is in the file, and says nothing of the drive's speed.
 pub fn halts(plan: &Fill, start: &Start, steps: &[Step], next: u64) -> Option<Halt> {
     let written: u64 = steps.iter().map(|step| step.bytes).sum();
     let last = steps.last();
@@ -301,7 +303,9 @@ pub fn halts(plan: &Fill, start: &Start, steps: &[Step], next: u64) -> Option<Ha
         }
     }
     if let [.., one, other] = steps {
-        let too_slow = |step: &&Step| (step.bytes as f64 / step.seconds.max(1e-6)) < plan.slow_below as f64;
+        let timed = |step: &&Step| step.bytes >= plan.slow_below;
+        let too_slow =
+            |step: &&Step| timed(step) && (step.bytes as f64 / step.seconds.max(1e-6)) < plan.slow_below as f64;
         if plan.slow_below > 0 && [one, other].iter().all(too_slow) {
             return Some(Halt::Slow);
         }
@@ -764,6 +768,12 @@ mod tests {
         assert_eq!((plan.slow_below, plan.on_line(None).slow_below), (SLOW_AT_MOST, SLOW_AT_MOST));
         // The probe is never ended for being slow.
         assert_eq!(Fill::probe(PROBE_BYTES, SETTLE).slow_below, 0);
+        // Nor is anything for steps too small to time: two megabytes that took a second
+        // each are the time it takes to make a file safe, not the speed of the drive.
+        let small = |seconds: f64| Step { bytes: 2 * MIB, seconds, ..clean(1) };
+        assert_eq!(halts(&plan, &start, &[small(1.0), small(1.0), small(1.0)], 2 * MIB), None);
+        let timed = |seconds: f64| Step { bytes: SLOW_AT_MOST, seconds, ..clean(1) };
+        assert_eq!(halts(&plan, &start, &[timed(2.0), timed(2.0)], 2 * MIB), Some(Halt::Slow));
 
         // A step that took longer than a step may is the last: three minutes a gigabyte.
         let mut stalled = run(5);
