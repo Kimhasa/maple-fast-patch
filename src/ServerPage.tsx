@@ -1,4 +1,4 @@
-import type { ButtonKind, Row, ServerId, Settings, SiteView } from "./api";
+import type { ButtonKind, Row, ServerId, Settings, SiteView } from "./types";
 import Icon from "./Icon";
 import * as patcher from "./patcher";
 
@@ -89,7 +89,7 @@ export default function ServerPage({ site, v, settings, copied, inert }: Props) 
         )}
 
         {phase === "ready" ? (
-          <div className={`rows ${v.tightRows ? "tight" : ""}`}>
+          <div className={`rows ${v.tightRows ? "tight" : ""} ${v.tightestRows ? "tightest" : ""}`}>
             {v.listedRows.map((row) => (
               <div key={row.kind}>
                 <span className={`check ${row.ok === null ? "" : row.ok ? "ok" : "bad"}`}>
@@ -97,7 +97,7 @@ export default function ServerPage({ site, v, settings, copied, inert }: Props) 
                   {row.label}
                 </span>
                 <b className={[row.ok === false && "bad", row.kind === "folder" && "path"].filter(Boolean).join(" ")}>
-                  <RowValue row={row} site={site} outdated={v.outdated} />
+                  <RowValue row={row} site={site} />
                 </b>
               </div>
             ))}
@@ -181,7 +181,7 @@ export default function ServerPage({ site, v, settings, copied, inert }: Props) 
 }
 
 /** What a line of the ready screen says at its right, and what it offers there. */
-function RowValue({ row, site, outdated }: { row: Row; site: SiteView; outdated: boolean }) {
+function RowValue({ row, site }: { row: Row; site: SiteView }) {
   const { server } = site;
   if (row.kind === "leftover") {
     return (
@@ -197,7 +197,7 @@ function RowValue({ row, site, outdated }: { row: Row; site: SiteView; outdated:
     return (
       <>
         {row.detail}
-        <button className="mini" onClick={() => patcher.enterAddress(server)} disabled={outdated || site.locked !== null}>
+        <button className="mini" onClick={() => patcher.enterAddress(server)} disabled={site.locked !== null}>
           주소 입력
         </button>
       </>

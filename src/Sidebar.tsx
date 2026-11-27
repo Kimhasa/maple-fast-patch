@@ -1,9 +1,9 @@
-import type { ServerId, SiteView } from "./api";
+import type { ServerId, SiteView } from "./types";
 import Icon, { type IconName } from "./Icon";
 import * as patcher from "./patcher";
 
-/** What a client is called in the sidebar, and its mark there. */
-const clients: Record<ServerId, { label: string; icon: IconName }> = {
+/** What a client is called in the sidebar, and its mark there. A tab for a client is called the same. */
+export const clients: Record<ServerId, { label: string; icon: IconName }> = {
   live: { label: "본섭", icon: "monitor" },
   test: { label: "테섭", icon: "flask" },
 };
@@ -17,8 +17,8 @@ type Props = {
 };
 
 /**
- * The way from page to page: an item for each client the backend has, in its order, and the
- * settings at the foot.
+ * The way from page to page: an item for each client the backend has, in its order, and at
+ * the foot the page that says what kind of PC this is, and the settings.
  *
  * An item also says what a page that is not open would: a lock where another client's run
  * keeps this one from starting, and how far a run has come while its own page is not the
@@ -53,7 +53,15 @@ export default function Sidebar({ sites, running, page }: Props) {
         );
       })}
       <button
-        className="nav last"
+        className="nav apart"
+        aria-current={page === "diagnosis" ? "page" : undefined}
+        onClick={() => patcher.openPage("diagnosis")}
+      >
+        <Icon name="search" />
+        검사
+      </button>
+      <button
+        className="nav"
         aria-current={page === "settings" ? "page" : undefined}
         onClick={() => patcher.openPage("settings")}
       >

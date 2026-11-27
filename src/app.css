@@ -1,10 +1,5 @@
 @font-face {
   font-family: "NEXON Lv2 Gothic";
-  font-weight: 300;
-  src: url("/fonts/NEXON-Lv2-Gothic-Light.woff") format("woff");
-}
-@font-face {
-  font-family: "NEXON Lv2 Gothic";
   font-weight: 400;
   src: url("/fonts/NEXON-Lv2-Gothic.woff") format("woff");
 }
@@ -47,7 +42,6 @@ body {
   --green: #71ab29;
   --bad: #ff6b5e;
   --closed: #ffb238;
-  position: relative;
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -78,6 +72,18 @@ button:disabled {
   cursor: default;
   opacity: 0.5;
 }
+/* Line icons: drawn with the text colour, sized with the text. */
+.icon {
+  width: 1.15em;
+  height: 1.15em;
+  flex: none;
+  vertical-align: -0.2em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 
 .top {
   position: relative;
@@ -101,11 +107,9 @@ button:disabled {
 .side {
   margin-left: auto;
   display: flex;
-  gap: 0;
   margin-right: -12px;
   align-items: center;
   color: var(--sub);
-  font-size: 16px;
 }
 .side button {
   width: 40px;
@@ -175,8 +179,9 @@ button:disabled {
   width: 3px;
   background: var(--lime);
 }
-/* The settings stand apart from the clients, at the foot. */
-.nav.last {
+/* What is not a client stands apart from the clients, at the foot: the first of those items
+   is pushed down there, and the settings follow it. */
+.nav.apart {
   margin-top: auto;
 }
 /* A client that another's run keeps from starting has a lock at its corner. */
@@ -190,18 +195,13 @@ button:disabled {
   width: 12px;
   height: 12px;
 }
-/* A run that is going on while another page is open: the line of its own page, in small. */
+/* A run that is going on while another page is open: the line of its own page, in small.
+   What fills it is drawn by that line's rule. */
 .nav .going {
   position: absolute;
   inset: auto 22px 5px;
   height: 2px;
   background: var(--track);
-}
-.nav .going b {
-  display: block;
-  height: 100%;
-  background: var(--lime);
-  transition: width 0.2s linear;
 }
 .content {
   position: relative;
@@ -211,12 +211,16 @@ button:disabled {
   flex-direction: column;
 }
 
+/* What a page holds is at most 1120px wide. In the smallest window it has 40px on either
+   side; in a window made wider than it can fill it stands in the middle of what is beside
+   the sidebar. The client pages, the settings, the check and the footer all begin so. */
 .stage {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   padding: 44px 48px 34px;
+  padding-inline: max(40px, calc((100% - 1120px) / 2));
 }
 h1 {
   font-size: 36px;
@@ -238,12 +242,18 @@ h1 {
 .ver b.closed {
   color: var(--closed);
 }
+/* When the server was last asked, after the newest version; when a maintenance is to end. */
+.ver .at {
+  margin-left: 14px;
+  font-size: 14px;
+  color: var(--dim);
+}
 /* The lines of the ready screen stand at the foot of the page, under the title. In a window
-   made wide they stay as long as they are in the smallest one, so that a value stays
-   within reach of what it is called. */
+   made wide they grow no longer than the page does, so that a value stays within reach of
+   what it is called. */
 .rows {
   margin-top: auto;
-  max-width: 944px;
+  max-width: 1120px;
 }
 .rows div {
   display: flex;
@@ -268,6 +278,32 @@ h1 {
 }
 .rows.tight b.path .clip {
   line-height: 26px;
+}
+/* At a PC that is no ordinary one, a line says so, and all of them at once are nine. They
+   move closer still, and what stands in a line is made lower with it: nine take 252px of the
+   259px. */
+.rows.tightest div {
+  min-height: 28px;
+}
+.rows.tightest .mini,
+.rows.tightest b.path .clip {
+  height: 24px;
+}
+.rows.tightest b.path .clip {
+  line-height: 22px;
+}
+/* In a window as high as it opens at, and higher, nine lines have the room eight take. */
+@media (min-height: 650px) {
+  .rows.tightest div {
+    min-height: 32px;
+  }
+  .rows.tightest .mini,
+  .rows.tightest b.path .clip {
+    height: 28px;
+  }
+  .rows.tightest b.path .clip {
+    line-height: 26px;
+  }
 }
 .rows span {
   color: var(--sub);
@@ -298,7 +334,7 @@ h1 {
   color: inherit;
 }
 .rows b.path .clip {
-  flex: 0 1 460px;
+  flex: 0 1 520px;
   min-width: 0;
   height: 34px;
   padding: 0 12px;
@@ -343,6 +379,14 @@ h1 {
 .rows.tight .seg button {
   height: 26px;
 }
+.rows.tightest .seg button {
+  height: 22px;
+}
+@media (min-height: 650px) {
+  .rows.tightest .seg button {
+    height: 26px;
+  }
+}
 .rows .check.ok svg {
   color: var(--lime-text);
 }
@@ -360,13 +404,6 @@ h1 {
   color: var(--ink);
   font-size: 14px;
   white-space: nowrap;
-  transition: background-color 0.12s;
-}
-.mini:hover:not(:disabled) {
-  background: #343434;
-}
-.mini:active:not(:disabled) {
-  background: #202020;
 }
 /* Word of a newer version of this app is a button of this kind in the bar, and not one of
    the bar's icons. */
@@ -375,10 +412,6 @@ h1 {
   width: auto;
   height: 24px;
   margin-left: 0;
-  color: var(--ink);
-}
-.ok {
-  color: var(--lime-text);
 }
 .bad {
   color: var(--bad);
@@ -397,7 +430,8 @@ h1 {
   height: 6px;
   background: var(--track);
 }
-.line i {
+.line i,
+.nav .going b {
   display: block;
   height: 100%;
   background: var(--lime);
@@ -418,7 +452,8 @@ h1 {
   /* The figure, the status and the sizes on the right all sit on the footer's middle line. */
   align-items: center;
   gap: 16px;
-  padding-left: 48px;
+  /* It begins where the page above it begins. */
+  padding-left: max(40px, calc((100% - 1120px) / 2));
   align-self: center;
 }
 .st b {
@@ -496,14 +531,19 @@ h1 {
   color: #fff;
 }
 /* Buttons answer the pointer: lighter under it, darker while pressed. */
+.mini,
 .act,
 .primary {
   transition: background-color 0.12s;
 }
-.act:hover:not(:disabled) {
+.mini:hover:not(:disabled),
+.act:hover:not(:disabled),
+.primary.second:hover {
   background: #343434;
 }
-.act:active:not(:disabled) {
+.mini:active:not(:disabled),
+.act:active:not(:disabled),
+.primary.second:active {
   background: #202020;
 }
 .act.go:hover:not(:disabled),
@@ -562,6 +602,11 @@ h1 {
   color: var(--sub);
   margin-top: 2px;
 }
+.detail {
+  font-size: 13px;
+  word-break: break-all;
+  user-select: text;
+}
 .primary {
   display: block;
   margin: 22px auto 0;
@@ -608,12 +653,7 @@ h1 {
 .primary.second {
   background: var(--block);
 }
-.primary.second:hover {
-  background: #343434;
-}
-.primary.second:active {
-  background: #202020;
-}
+
 /* The settings: a page of their own, a tab for each group of them. Nothing is ruled off
    from anything else here: what belongs together stands together, and the space between
    says the rest. */
@@ -621,6 +661,7 @@ h1 {
   flex: 1;
   min-height: 0;
   padding: 14px 48px 24px;
+  padding-inline: max(40px, calc((100% - 1120px) / 2));
   overflow-y: auto;
 }
 /* The tabs stand in a row at the top. The one that is open is white, with a green bar
@@ -660,7 +701,7 @@ h1 {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  max-width: 944px;
+  max-width: 1120px;
   padding: 13px 0;
   /* The two greys of a setting in the NVIDIA app: its name, and what it does under it. */
   color: #e8e8e8;
@@ -728,28 +769,190 @@ h1 {
   background: #fff;
   transform: translateX(36px);
 }
-.detail {
-  font-size: 13px;
-  word-break: break-all;
-  user-select: text;
-}
 
-/* Line icons: drawn with the text colour, sized with the text. */
-.icon {
-  width: 1.15em;
-  height: 1.15em;
+/* What kind of PC this is: a page of its own, a tab for each client that has a folder. The
+   page itself does not scroll. The whole report is only there once it is asked for: it then
+   takes the room the rest leaves, and scrolls within it. */
+.diagnosis {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 48px 24px;
+  padding-inline: max(40px, calc((100% - 1120px) / 2));
+}
+.diagnosis > * {
+  max-width: 1120px;
+}
+/* The tabs, and at the other end of their row what can be done about what the page shows.
+   Under the row there is the room the settings have under their tabs. */
+.head {
   flex: none;
-  vertical-align: -0.2em;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 22px;
 }
-
-/* When the server was last asked, after the newest version; when a maintenance is to end. */
-.ver .at {
-  margin-left: 14px;
+.head .tabs {
+  margin-bottom: 0;
+}
+.tools {
+  flex: none;
+  display: flex;
+}
+/* All four are as wide as the longest of what they are called, so that one that is called
+   something else for a while moves none of the others. The button that brings the report
+   and puts it away is called two things as well, and is as wide as they are. */
+.tools .mini,
+.result > .mini {
+  width: 92px;
+  padding: 0;
+}
+/* Under the tabs: the answers with the button that brings the report, and at the foot of
+   the page a check of the game's files that is at work. The report, once it is asked for,
+   stands beside the answers and takes the height of the page, so that as much of it as can
+   be is read without scrolling. The answers keep 340px in the smallest window and get more
+   in a wider one, up to where the longest reason there is stands in one line. */
+.diagnosis section {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.diagnosis section.detailed {
+  grid-template-columns: clamp(340px, calc(100% - 624px), 404px) minmax(0, 1fr);
+  column-gap: 20px;
+}
+.result {
+  grid-area: 1 / 1;
+}
+/* The answers of the check, all drawn alike: what is asked in a column as wide as the
+   longest of them, the answer beside it, and under the answer the one line said for why.
+   So what is asked begins under one another, and so do the answers. An answer is written
+   in the colour of how it is to be taken. */
+.answers {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 18px;
+  row-gap: 17px;
+  margin-top: 4px;
+}
+.answers div {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: baseline;
+  line-height: 1.3;
+}
+.answers span {
+  color: #bababa;
+}
+.answers b {
+  font-size: 19px;
+  color: var(--ink);
+}
+.answers b.good {
+  color: var(--lime-text);
+}
+.answers b.caution {
+  color: var(--closed);
+}
+/* A reason that is longer than its line goes on at a space, not within a word. */
+.answers small {
+  grid-column: 2;
+  margin-top: 2px;
+  color: #bababa;
   font-size: 14px;
+  line-height: 1.4;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+/* The button that brings the whole report stands under the answers, at their left edge. */
+.result > .mini {
+  margin: 18px 0 0;
+}
+/* The report: the one part of the page that scrolls. Its names stand in one column, as wide
+   as the longest of them, and what is said of each beside it; a heading and the line that
+   says what wrote the report go across both. The parts are kept apart by room alone. The
+   page as a whole lets no text be selected. This can be. */
+.report {
+  grid-area: 1 / 2 / 3 / 3;
+  min-height: 0;
+  padding: 12px 16px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 16px;
+  align-content: start;
+  font-size: 13px;
+  line-height: 1.65;
+  user-select: text;
+  cursor: text;
+}
+/* What the report is scrolled by: a thin bar without arrows, which is only seen while the
+   pointer is over the report. It keeps its place when it is not seen, so that nothing in
+   the report moves as it comes and goes, and it is a little wider than it is drawn, to be
+   caught more easily.
+   The bar is drawn in the report's own text colour, which nothing written in the report
+   uses: every line of it has a colour of its own. The browser draws the bar anew when
+   that colour changes, and does not when only a rule for the bar begins to hold. */
+.report {
+  color: transparent;
+  transition: color 0.15s;
+}
+.report:hover {
+  color: #4d4d4d;
+}
+.report::-webkit-scrollbar {
+  width: 8px;
+}
+.report::-webkit-scrollbar-button {
+  display: none;
+}
+.report::-webkit-scrollbar-track {
+  background: transparent;
+}
+.report::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 8px;
+}
+.report::-webkit-scrollbar-thumb:hover {
+  box-shadow: inset 0 0 0 8px var(--dim);
+}
+.report p,
+.report h3 {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.report p {
   color: var(--dim);
+}
+.report h3 {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.report span {
+  color: var(--label);
+}
+/* What is said that is longer than its line goes on at a space, not within a word. */
+.report b {
+  color: #e8e8e8;
+  font-weight: 400;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+/* A check of the game's files that is at work: what it is doing in a line and how far it is
+   in a bar under it, as a run has them on a client's page. They stand at the foot of the
+   page, across all of it, whether the report is above them or not. */
+.checking {
+  grid-area: 3 / 1 / 4 / -1;
+  padding-top: 10px;
+}
+.checking .line {
+  margin-top: 6px;
 }

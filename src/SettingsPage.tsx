@@ -1,5 +1,5 @@
 import { type KeyboardEvent, useState } from "react";
-import type { Settings } from "./api";
+import type { Settings } from "./types";
 import * as patcher from "./patcher";
 
 /**

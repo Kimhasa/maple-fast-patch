@@ -11,41 +11,55 @@
 import {
   answerClose,
   askAgain,
+  askFileCheck,
   copyText,
-  defaultSettings,
   confirmPatchAddress,
+  diagnoseAgain,
   discardLeftovers,
   dismissRun,
   launchGame,
   onSaid,
   onShown,
+  openBugReportPage,
   openDownloadPage,
   openReleasePage,
-  opensOn,
   pickInstallDir,
   resetInstallDir,
+  restartWithRights,
   runReport,
   setSettings,
+  startFileCheck,
   startPatch,
   startPatchAt,
+  stopFileCheck,
   stopPatch,
   takeSnapshot,
+} from "./api";
+import { opensOn } from "./standins";
+import {
+  defaultSettings,
   type AppView,
   type AppWord,
+  type Checking,
   type Progress,
   type Refusal,
   type ServerId,
   type Settings,
   type SiteView,
-} from "./api";
+} from "./types";
 
 /** A download that brings nothing for this long is not timed: nothing is arriving. */
 const QUIET_MS = 4000;
-/** How many lines the ready screen has room for at their usual height. */
+/** How many lines the ready screen has room for at their usual height, in the smallest window. */
 const ROWS_AT_EASE = 5;
+/** How many it has room for there once they are drawn closer together. */
+const ROWS_TIGHT = 8;
 
-/** What the window shows beside its sidebar: the page of a client, or the settings. */
-export type Page = ServerId | "settings";
+/**
+ * What the window shows beside its sidebar: the page of a client, the page that says what
+ * kind of PC this is, or the settings.
+ */
+export type Page = ServerId | "diagnosis" | "settings";
 
 export type State = {
   /** What the backend last said of everything the screen shows. Of a client, nothing until it has. */
@@ -57,8 +71,8 @@ export type State = {
    * says that the window was closed on it, and the backend is given the answer.
    */
   dialog: "none" | "blocked" | "failed" | "ask" | "address" | "closing";
-  /** What the "ask" dialog asks, the line under it, and what a yes does. */
-  question: { message: string; detail: string; yes: () => void } | null;
+  /** What the "ask" dialog asks, and what a yes does. */
+  question: { message: string; yes: () => void } | null;
   /** What the "address" dialog is for: whose patch, and what stands in its field. */
   address: { server: ServerId; value: string } | null;
   /** What the "failed" dialog says: a headline, the reason, and any further lines. */
@@ -70,6 +84,10 @@ export type State = {
   blocked: { server: ServerId; messages: string[] } | null;
   /** How the finished run went was just copied; the button that copies it says so for a moment. */
   copied: boolean;
+  /** The client whose report of the PC was just copied; the button that copies it says so for a moment. */
+  reportCopied: ServerId | null;
+  /** How far each check of a client's game files is that is at work and has said so. */
+  checks: Checking[];
   /** How fast the current step is going, in bytes a second. Measured for the two long steps. */
   speed: number;
   /** Seconds the current step still needs, once it has been watched long enough to say. */
@@ -85,6 +103,8 @@ let state: State = {
   failure: null,
   blocked: null,
   copied: false,
+  reportCopied: null,
+  checks: [],
   speed: 0,
   left: null,
 };
@@ -154,17 +174,23 @@ export function view(s: State) {
   /** The install folder is there and is a game folder. Only then are there versions to show. */
   const gameFolder = rows.some((row) => row.kind === "folder" && row.ok);
   /**
-   * The ready screen has more lines than fit at their usual height. It then draws them closer
-   * together. Under the lines the backend lists stands one of the page's own, where the way
-   * of patching is chosen, whenever there is a game folder.
-   */
-  /**
    * The way of patching that is chosen is one the drive does not take: the backend's line
    * of it. It is not drawn among the lines; the page's own line for the choice carries it.
    */
   const wayRefused = rows.find((row) => row.kind === "way" && row.ok === false) ?? null;
   const listedRows = rows.filter((row) => row.kind !== "way");
-  const tightRows = listedRows.length + (gameFolder ? 1 : 0) > ROWS_AT_EASE;
+  /**
+   * The ready screen has more lines than fit at their usual height. It then draws them closer
+   * together. Under the lines the backend lists stands one of the page's own, where the way
+   * of patching is chosen, whenever there is a game folder.
+   */
+  const drawnRows = listedRows.length + (gameFolder ? 1 : 0);
+  const tightRows = drawnRows > ROWS_AT_EASE;
+  /**
+   * There are more lines than fit even so: all of them at once, at a PC that is no ordinary
+   * one, which has a line that says so. They are then drawn closer still.
+   */
+  const tightestRows = drawnRows > ROWS_TIGHT;
   /** What is in the way of the start that was turned down, a sentence each. */
   const listed = inTheWayOf(sites.find((site) => site.server === s.blocked?.server));
   const inTheWay = listed.length > 0 ? listed : (s.blocked?.messages ?? []);
@@ -174,10 +200,19 @@ export function view(s: State) {
   const downloadSpeed = moving && run.step === "download" ? s.speed : null;
   /** Seconds the building of the new files still needs. */
   const remaining = moving && run.step === "rebuild" ? s.left : null;
-  /** This version of the app is too old to patch with; a newer one has to be got first. */
-  const outdated = s.app.update?.required ?? false;
 
-  return { page, site, gameFolder, listedRows, wayRefused, tightRows, inTheWay, downloadSpeed, remaining, outdated };
+  return {
+    page,
+    site,
+    gameFolder,
+    listedRows,
+    wayRefused,
+    tightRows,
+    tightestRows,
+    inTheWay,
+    downloadSpeed,
+    remaining,
+  };
 }
 
 /**
@@ -197,6 +232,10 @@ function heard(site: SiteView) {
   }
   set({ app: { ...state.app, sites }, ...(going ? {} : { speed: 0, left: null }) });
   settle();
+  // How far a check of the game's files is, is kept only while the check is at work.
+  if (!site.diagnosis?.checking && state.checks.some((check) => check.server === site.server)) {
+    set({ checks: state.checks.filter((check) => check.server !== site.server) });
+  }
   // A dialog about what is in the way has nothing left to say once nothing is.
   if (state.dialog === "blocked" && site.server === state.blocked?.server && inTheWayOf(site).length === 0) {
     set({ dialog: "none" });
@@ -253,12 +292,22 @@ function progressed(progress: Progress) {
   }
   heardAt = at;
   const { percent, step, done, total, worked, activity } = progress;
-  const told = { ...site, percent, run: { ...site.run, percent, step, done, total, worked, activity } };
+  const told ={ ...site, percent, run: { ...site.run, step, done, total, worked, activity } };
   set({
     app: { ...state.app, sites: state.app.sites.map((known) => (known === site ? told : known)) },
     speed: paced ? state.speed : 0,
     left: paced ? state.left : null,
   });
+}
+
+/**
+ * Takes in how far a check of a client's game files says it is. What is said of a check
+ * that has ended comes late, and is dropped.
+ */
+function checked(word: Checking) {
+  const site = state.app.sites.find((known) => known.server === word.server);
+  if (site && !site.diagnosis?.checking) return;
+  set({ checks: [...state.checks.filter((check) => check.server !== word.server), word] });
 }
 
 /**
@@ -275,9 +324,13 @@ async function sync() {
   settle();
 }
 
-/** Shows that something other than a patch run went wrong. */
+/**
+ * Shows that something other than a patch run went wrong. A reason that says no more than
+ * the headline does is not said a second time.
+ */
 function report(title: string, reason: unknown) {
-  set({ failure: { title, message: String(reason), details: [] }, dialog: "failed" });
+  const said = String(reason);
+  set({ failure: { title, message: said === title ? null : said, details: [] }, dialog: "failed" });
 }
 
 /** Opens a page. Whatever dialog is open is closed with it, as by its own button. */
@@ -291,6 +344,10 @@ export function checkAgain(server: ServerId) {
   askAgain(server);
 }
 
+/** Whether a start was rejected with one of the backend's refusals, and not with something else. */
+const isRefusal = (reason: unknown): reason is Refusal =>
+  typeof reason === "object" && reason !== null && "kind" in reason && Array.isArray((reason as Refusal).messages);
+
 /**
  * Waits for a start that was asked of the backend for `server`, and shows why when no run
  * was begun. The backend looks at the folder first, and decides.
@@ -299,7 +356,14 @@ async function begun(server: ServerId, asked: Promise<void>) {
   try {
     await asked;
   } catch (reason) {
-    const refusal = reason as Refusal;
+    // Something else than one of the backend's refusals (a plain string from Tauri, an
+    // Error): the start cannot go on, said as the backend says that, with what came as the
+    // reason under it.
+    if (!isRefusal(reason)) {
+      report("패치를 진행할 수 없습니다.", reason);
+      return;
+    }
+    const refusal = reason;
     // A run is at work already: the button was pressed twice.
     if (refusal.kind === "busy") return;
     if (refusal.kind === "blocked") {
@@ -310,11 +374,7 @@ async function begun(server: ServerId, asked: Promise<void>) {
     // after a yes, which the backend takes for that one address. The question is its own.
     if (refusal.kind === "ask") {
       set({
-        question: {
-          message: refusal.messages[0] ?? "",
-          detail: "",
-          yes: () => begun(server, confirmPatchAddress(server)),
-        },
+        question: { message: refusal.messages[0] ?? "", yes: () => begun(server, confirmPatchAddress(server)) },
         dialog: "ask",
       });
       return;
@@ -395,7 +455,6 @@ export function discard(server: ServerId) {
   set({
     question: {
       message: "삭제 후에는 공식 런처로 게임을 복구해야 합니다.\n이전 패치 작업을 삭제하시겠습니까?",
-      detail: "",
       yes: () => discardNow(server, true),
     },
     dialog: "ask",
@@ -421,6 +480,43 @@ export async function copyReport(server: ServerId) {
   setTimeout(() => set({ copied: false }), 2000);
 }
 
+/** Has the PC checked again for `server`: what kind of PC it is, and what a patch is to expect on it. */
+export function diagnose(server: ServerId) {
+  diagnoseAgain(server);
+}
+
+/**
+ * Has the game's files of `server` checked, once the user has said yes to it. The backend
+ * words the question, with about how long the check takes on this PC. Where the check
+ * cannot be begun now it has none, and nothing is asked.
+ */
+export async function checkFiles(server: ServerId) {
+  const message = await askFileCheck(server).catch(() => null);
+  if (message === null) return;
+  set({ question: { message, yes: () => void startFileCheck(server) }, dialog: "ask" });
+}
+
+/** Stops the check of the game's files of `server`. What was found before it stays on the page. */
+export function stopChecking(server: ServerId) {
+  stopFileCheck(server);
+}
+
+/**
+ * Copies the report of the PC that stands on the page for `server` to the clipboard, as
+ * text to send on. Where it does not get there, the button does not say that it did.
+ */
+export async function copyDiagnosis(server: ServerId) {
+  const report = state.app.sites.find((site) => site.server === server)?.diagnosis?.report ?? "";
+  if (report === "" || !(await copyText(report))) return;
+  set({ reportCopied: server });
+  setTimeout(() => set({ reportCopied: null }), 2000);
+}
+
+/** Opens the page bugs are reported on. Where it does not open, nothing is said. */
+export function reportBug() {
+  openBugReportPage().catch(() => {});
+}
+
 export async function launch(server: ServerId) {
   if (launching) return;
   launching = true;
@@ -433,32 +529,38 @@ export async function launch(server: ServerId) {
   }
 }
 
-export async function download(server: ServerId) {
+/** Waits for a download page that was asked of the backend, and says so when it could not be opened. */
+async function pageOpened(asked: Promise<void>) {
   try {
-    await openDownloadPage(server);
+    await asked;
   } catch (reason) {
     report("다운로드 페이지를 열 수 없습니다.", reason);
   }
 }
 
+export function download(server: ServerId) {
+  return pageOpened(openDownloadPage(server));
+}
+
 /** Opens the page a newer version of this app is downloaded from. */
-export async function downloadUpdate() {
-  try {
-    await openReleasePage();
-  } catch (reason) {
-    report("다운로드 페이지를 열 수 없습니다.", reason);
-  }
+export function downloadUpdate() {
+  return pageOpened(openReleasePage());
 }
 
 /** Turns one of the settings on or off. */
 export async function setSetting(name: keyof Settings, on: boolean) {
-  const before = state.app.settings;
-  const wanted = { ...before, [name]: on };
+  const before = state.app.settings[name];
+  const wanted = { ...state.app.settings, [name]: on };
   set({ app: { ...state.app, settings: wanted } });
   try {
-    await setSettings(wanted);
+    // What was set is kept. Where it calls for a question, the backend has the page ask
+    // it: whether the app is to start again with administrator rights, which starting the
+    // game by itself takes. A no leaves everything as it was set.
+    const question = await setSettings(wanted);
+    if (question) set({ question: { message: question, yes: () => void restartWithRights() }, dialog: "ask" });
   } catch (reason) {
-    set({ app: { ...state.app, settings: before } });
+    // Only this one goes back: another may have been set meanwhile, and stays as it is.
+    set({ app: { ...state.app, settings: { ...state.app.settings, [name]: before } } });
     report("설정을 저장할 수 없습니다.", reason);
   }
 }
@@ -521,7 +623,7 @@ function tick() {
  * warning, and a patch that gets published while the app is open shows up.
  */
 export function init() {
-  const said = onSaid({ site: heard, progress: progressed, app: heardWord });
+  const said = onSaid({ site: heard, progress: progressed, app: heardWord, checking: checked });
   // What the backend knows is asked for once what it says from now on is heard, so that
   // nothing it says in between is missed.
   said.listening.then(sync);

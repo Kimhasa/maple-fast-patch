@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { closeWindow, minimizeWindow, pageDrawn } from "./api";
+import DiagnosisPage from "./DiagnosisPage";
 import Icon from "./Icon";
 import * as patcher from "./patcher";
 import ServerPage from "./ServerPage";
@@ -57,6 +58,8 @@ export default function App() {
         <div className="content">
           {v.page === "settings" ? (
             <SettingsPage settings={s.app.settings} inert={dialogOpen} />
+          ) : v.page === "diagnosis" ? (
+            <DiagnosisPage sites={s.app.sites} checks={s.checks} copied={s.reportCopied} inert={dialogOpen} />
           ) : (
             v.site && (
               <ServerPage
@@ -71,7 +74,7 @@ export default function App() {
           )}
 
           {dialogOpen && (
-            <div className={`dim ${v.page === "settings" ? "whole" : ""}`}>
+            <div className={`dim ${v.site ? "" : "whole"}`}>
               <div className={`dlg ${s.dialog === "address" ? "wide" : ""}`}>
                 <div className="hd">
                   <b>MAPLE FAST PATCH</b>
@@ -155,7 +158,6 @@ function DialogBody({ s, v }: { s: patcher.State; v: ReturnType<typeof patcher.v
     return (
       <div className="bd">
         <p>{s.question.message}</p>
-        {s.question.detail && <p className="why detail">{s.question.detail}</p>}
         <div className="pair">
           <button className="primary" onClick={patcher.agree}>
             확인
