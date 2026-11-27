@@ -6,8 +6,10 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use crate::desk::tell_app;
+use crate::rights::elevated;
 use crate::state::Patcher;
 use crate::window::settle_tray;
+use crate::wording::ASKS_TO_RESTART_WITH_RIGHTS;
 
 /// What the user has set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -134,13 +136,23 @@ impl DriveKind {
     }
 }
 
+/// Takes in what the user has set on the page, and keeps it. Hands back a question for the
+/// page to ask, where what was set calls for one: switching 패치 후 게임 자동 실행 on in an app
+/// that runs without administrator rights asks whether it is to start again with them; see
+/// [`crate::rights`]. The setting is kept whatever the answer, and a yes is given by
+/// [`restart_with_rights`](crate::rights::restart_with_rights).
 #[tauri::command]
-pub(crate) fn set_settings(app: AppHandle, patcher: State<Patcher>, settings: Settings) -> Result<(), String> {
+pub(crate) fn set_settings(
+    app: AppHandle,
+    patcher: State<Patcher>,
+    settings: Settings,
+) -> Result<Option<&'static str>, String> {
     // The screen knows the switches only. What the settings file says beyond them stays.
     let storage = patcher.settings.lock().unwrap().storage;
     let settings = Settings { storage, ..settings };
     settings.save(&patcher.data).map_err(|_| "설정을 저장할 수 없습니다.".to_owned())?;
     let before = std::mem::replace(&mut *patcher.settings.lock().unwrap(), settings);
+    let asks = patcher.standing(elevated()).asks(before.auto_start, settings.auto_start);
     if before.background != settings.background {
         settle_tray(&app);
     }
@@ -152,7 +164,7 @@ pub(crate) fn set_settings(app: AppHandle, patcher: State<Patcher>, settings: Se
     // The page shows what is set, and the desks go by it: a patch that was waiting for the
     // user may be the app's to start from here on.
     tell_app(&app, &patcher);
-    Ok(())
+    Ok(asks.then_some(ASKS_TO_RESTART_WITH_RIGHTS))
 }
 
 #[cfg(test)]

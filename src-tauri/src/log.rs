@@ -444,8 +444,8 @@ mod tests {
         );
 
         // A check works in the app's own folder.
-        let full = r"check failed: write C:\Users\kim\AppData\Local\com.maplefastpatch.app\patches\peek-4120-0.tmp: There is not enough space on the disk. (os error 112)";
-        let expected = r"check failed: write <data>\patches\peek-4120-0.tmp: There is not enough space on the disk. (os error 112)";
+        let full = r"check failed: write C:\Users\kim\AppData\Local\com.maplefastpatch.app\patches\00421-minor-03to04.patch.part: There is not enough space on the disk. (os error 112)";
+        let expected = r"check failed: write <data>\patches\00421-minor-03to04.patch.part: There is not enough space on the disk. (os error 112)";
         assert_eq!(logged(full), expected);
         let of_test = r"[test] check failed: create C:\Users\kim\AppData\Local\com.maplefastpatch.app\test\patches: Access is denied. (os error 5)";
         assert_eq!(logged(of_test), r"[test] check failed: create <data>\test\patches: Access is denied. (os error 5)");

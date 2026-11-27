@@ -21,9 +21,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 mfp-kms = { path = "../crates/kms" }
 mfp-engine = { path = "../crates/engine" }
+# The diagnostic, which is also a program of its own: the app asks the same library.
+mfp-check = { path = "../crates/check" }
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Power", "Win32_System_SystemInformation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# `Win32_System_Registry` is there for `ShellExecuteExW` alone: its structure names a
+# registry key, and windows-sys leaves the call out without the feature. Nothing here reads
+# the registry by it. The four of `Win32_Security_Cryptography` and `Win32_Security_WinTrust`
+# are for Windows' check of a signature and for reading who signed: the two calls that hand
+# back the signer are left out without `_Catalog` and `_Sip`, which name nothing else here.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip", "Win32_Security_WinTrust", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Power", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

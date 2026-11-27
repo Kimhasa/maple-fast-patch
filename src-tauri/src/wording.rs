@@ -34,7 +34,9 @@ pub(crate) fn describe_problem(problem: &Problem) -> String {
             format!("{volume} 필요 {needed} · 여유 {available}")
         }
         Problem::NotWritable { .. } => "파일 쓰기 불가".to_owned(),
-        Problem::GameRunning { names } => names.join(", "),
+        // The line asks for the game to be closed, and nothing stands at its right: which of
+        // its programs are open is for the log, where the engine names them.
+        Problem::GameRunning { .. } => String::new(),
         Problem::FilesLocked { files } => format!("사용 중인 파일 {}개", files.len()),
         Problem::OutsideInstall { dir } => dir.display().to_string(),
         Problem::AlreadyRunning => "패치 진행 중".to_owned(),
@@ -56,7 +58,9 @@ pub(crate) fn sentence(game: &str, problem: &Problem) -> String {
             format!("디스크 공간이 부족합니다.\n{volume} 여유 공간을 {needed} 이상 확보해 주세요. (현재 {available})")
         }
         Problem::NotWritable { .. } => "설치 경로에 파일을 쓸 수 없습니다.".to_owned(),
-        Problem::GameRunning { .. } => "게임 관련 프로그램이 실행 중입니다.\n해당 프로그램을 종료해 주세요.".to_owned(),
+        // Which of the game's programs are open is in the log. Few know them by name, and
+        // what there is to do is the same for all of them.
+        Problem::GameRunning { .. } => quit_first(game),
         Problem::FilesLocked { .. } => "다른 프로그램이 게임 파일을 사용 중입니다.".to_owned(),
         Problem::OutsideInstall { dir } => {
             format!("설치 경로 밖으로 연결된 폴더가 있습니다. ({})", dir.display())
@@ -82,6 +86,42 @@ pub(crate) fn not_the_games_folder(game: &str) -> String {
 /// What is said when the install folder of the game called `game` is not found.
 pub(crate) fn no_folder_of(game: &str) -> String {
     format!("{game} 설치 경로를 찾을 수 없습니다.")
+}
+
+/// What is asked of the user while the game called `game` is open, which is in the way of
+/// a patch: the line of the ready screen says it, and so does a dialog. Both of the games'
+/// names end in a vowel, which is what the `를` after them goes by.
+pub(crate) fn quit_first(game: &str) -> String {
+    format!("{game}를 종료한 후 실행해 주세요.")
+}
+
+/// What the user is asked as they switch 패치 후 게임 자동 실행 on in an app that runs without
+/// administrator rights; see [`crate::rights`].
+pub(crate) const ASKS_TO_RESTART_WITH_RIGHTS: &str =
+    "게임 자동 실행에는 관리자 권한이 필요합니다.\n관리자 권한으로 다시 시작하시겠습니까?";
+
+/// A time something takes, as roughly as it is known: in minutes from 55 seconds on, and
+/// below that rounded up to ten seconds. The page words the time a run still needs by the
+/// same rule.
+fn about(seconds: f64) -> String {
+    if seconds >= 55.0 {
+        format!("약 {}분", ((seconds / 60.0).round() as u64).max(1))
+    } else {
+        format!("약 {}초", ((seconds / 10.0).ceil() as u64 * 10).max(10))
+    }
+}
+
+/// What the user is asked before the game's files are checked (see [`crate::diagnosis`]),
+/// with about how long that takes on this PC: `seconds`, where the diagnosis timed the
+/// drive. A player is asked in a player's words. What the check holds the files against is
+/// in the report, for whoever it is copied to.
+pub(crate) fn asks_to_check_files(seconds: Option<f64>) -> String {
+    let asks = "게임 파일을 검사하시겠습니까?";
+    match seconds.map(about) {
+        Some(about) if about.ends_with('분') => format!("{asks}\n{about}이 걸립니다."),
+        Some(about) => format!("{asks}\n{about}가 걸립니다."),
+        None => asks.to_owned(),
+    }
 }
 
 /// Why a run ended, as the sentence a dialog shows, and any lines that go under it. `game`
@@ -147,12 +187,20 @@ pub(crate) fn asks_about_address(game: &str) -> String {
 /// What the engine says of a download whose server was reached and then sent nothing more.
 const WENT_SILENT: &str = "the server went silent";
 
-/// What is said when an apply that was cut off could not be undone, and under it what is in
-/// the way, where the engine names something that is: a folder of the run's own that leads
-/// somewhere else, say, which nothing but taking the link away puts right.
 /// What the footer says of a folder in which an apply was cut off, until it is put back.
 pub(crate) const PUT_BACK_FIRST: &str = "이전 패치 복구 대기";
 
+/// What the footer of the ready screen says of an app that is too old. It is said and no
+/// more: a start is turned down for nothing of the kind.
+pub(crate) const UPDATE_FIRST: &str = "최신 버전으로 업데이트해 주세요.";
+
+/// What is said where a client has no install folder to do anything in: to whoever asks for
+/// something to be done there.
+pub(crate) const NO_FOLDER: &str = "설치 경로를 찾을 수 없습니다.";
+
+/// What is said when an apply that was cut off could not be undone, and under it what is in
+/// the way, where the engine names something that is: a folder of the run's own that leads
+/// somewhere else, say, which nothing but taking the link away puts right.
 pub(crate) fn not_restored(game: &str, err: &Error) -> String {
     let mut lines = vec!["이전 패치를 복구하지 못했습니다.".to_owned()];
     if let Error::Blocked(problems) = err {
@@ -228,9 +276,27 @@ pub(crate) fn size_label(bytes: u64) -> String {
     if bytes >= GB { gib(bytes) } else { format!("{} MB", bytes / MB) }
 }
 
+/// A size in whole megabytes, as the screen writes it: `1,229 MB`.
+pub(crate) fn megabytes(bytes: u64) -> String {
+    let whole = ((bytes as f64 / (1u64 << 20) as f64).round() as u64).to_string();
+    let mut grouped = String::new();
+    for (at, digit) in whole.chars().enumerate() {
+        if at > 0 && (whole.len() - at).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    format!("{grouped} MB")
+}
+
 /// How fast `bytes` came in over `seconds`: `86.0 MB/s`.
 pub(crate) fn speed(bytes: u64, seconds: f64) -> String {
     format!("{:.1} MB/s", bytes as f64 / MB as f64 / seconds)
+}
+
+/// How long something took, to the second: `1분 35초`, and `59초` under a minute.
+pub(crate) fn minutes_and_seconds(seconds: u64) -> String {
+    if seconds >= 60 { format!("{}분 {}초", seconds / 60, seconds % 60) } else { format!("{seconds}초") }
 }
 
 #[cfg(test)]
@@ -381,9 +447,50 @@ mod tests {
         // A problem a run is turned down for is worded by the same rule.
         let blocked = Error::Blocked(vec![no_game]);
         assert_eq!(describe_error(test, &blocked).0, "메이플스토리 테스트월드 설치 경로가 아닙니다.");
+        // The request to close the game names the game, and none of its programs: the line
+        // of the ready screen and the dialog say the one sentence, and nothing stands at
+        // the line's right.
+        let open = Problem::GameRunning { names: vec!["BlackCipher64.aes".to_owned(), "MapleStoryT.exe".to_owned()] };
+        assert_eq!(sentence(live, &open), "메이플스토리를 종료한 후 실행해 주세요.");
+        assert_eq!(sentence(test, &open), "메이플스토리 테스트월드를 종료한 후 실행해 주세요.");
+        assert_eq!((quit_first(live), describe_problem(&open)), (sentence(live, &open), String::new()));
+        assert_eq!(describe_error(test, &Error::Blocked(vec![open])), (quit_first(test), Vec::new()));
         // Nothing else names the game.
-        let open = Problem::GameRunning { names: vec!["MapleStoryT.exe".to_owned()] };
-        assert_eq!(sentence(live, &open), sentence(test, &open));
+        let held = Problem::FilesLocked { files: vec![PathBuf::from("Base.wz")] };
+        assert_eq!(sentence(live, &held), sentence(test, &held));
+    }
+
+    #[test]
+    fn the_user_is_asked_before_the_games_files_are_checked_with_about_how_long_it_takes() {
+        // Rounded as the page rounds the time a run still needs: up to ten seconds, and
+        // in minutes from 55 seconds on.
+        let table = [
+            (4.0, "약 10초가"),
+            (30.0, "약 30초가"),
+            (31.0, "약 40초가"),
+            (54.9, "약 60초가"),
+            (55.0, "약 1분이"),
+            (89.0, "약 1분이"),
+            (90.0, "약 2분이"),
+            (586.0, "약 10분이"),
+        ];
+        for (seconds, about) in table {
+            let asked = asks_to_check_files(Some(seconds));
+            assert_eq!(asked, format!("게임 파일을 검사하시겠습니까?\n{about} 걸립니다."), "{seconds}");
+        }
+        // Where the drive was not timed, nothing is said of the time.
+        assert_eq!(asks_to_check_files(None), "게임 파일을 검사하시겠습니까?");
+    }
+
+    #[test]
+    fn sizes_are_written_in_whole_megabytes_with_the_thousands_set_apart() {
+        assert_eq!(megabytes(0), "0 MB");
+        assert_eq!(megabytes(524_287), "0 MB");
+        assert_eq!(megabytes(524_288), "1 MB");
+        assert_eq!(megabytes(999 << 20), "999 MB");
+        assert_eq!(megabytes(1_288_490_189), "1,229 MB");
+        assert_eq!(megabytes(34_359_738_368), "32,768 MB");
+        assert_eq!(megabytes(1_234_567 << 20), "1,234,567 MB");
     }
 
     #[test]

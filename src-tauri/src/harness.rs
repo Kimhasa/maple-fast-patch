@@ -4,14 +4,14 @@
 //! # In every build
 //!
 //! - `MFP_DATA_DIR=<folder>`: the app's data folder, in place of the usual one
-//!   (`%LOCALAPPDATA%\com.maplefastpatch.app`). The settings, the log, the install folder
-//!   that was picked, the records of every install folder and the cached patch files are
-//!   kept there, so a copy of the app started with it shares none of that with the usual
-//!   one. The folder is made when something is first written to it. Such a copy runs
-//!   beside the usual one and beside others like it: only without the variable does
-//!   starting the app a second time bring the first to the front. What the window's own
-//!   engine keeps (`EBWebView`) stays in the usual folder for every copy. What the app
-//!   keeps about the test world is in `test\` inside the data folder.
+//!   (`%LOCALAPPDATA%\com.maplefastpatch.app`). The settings, the size of the window, the
+//!   log, the install folder that was picked, the records of every install folder and the
+//!   cached patch files are kept there, so a copy of the app started with it shares none of
+//!   that with the usual one. The folder is made when something is first written to it.
+//!   Such a copy runs beside the usual one and beside others like it: only without the
+//!   variable does starting the app a second time bring the first to the front. What the
+//!   window's own engine keeps (`EBWebView`) stays in the usual folder for every copy. What
+//!   the app keeps about the test world is in `test\` inside the data folder.
 //!
 //! # In debug builds only
 //!
@@ -37,7 +37,7 @@
 //!   registry. It stands in for the registry's guess and for nothing else: what the app
 //!   works out or patches to is recorded, and a record goes first, as always.
 //!
-//! One is for both clients:
+//! Two are not of one client:
 //!
 //! - `MFP_ALLOW_REAL=1`: without it a debug build takes neither a folder with a `Nexon`
 //!   part in its path nor the folder the Nexon installer registered, wherever that is, as
@@ -94,11 +94,13 @@
 //!
 //! How soon the app notices goes by its own pace, which the made-up server's console shows
 //! request by request. Patch files are asked about as the app starts, every half minute
-//! while a maintenance is underway, and every ten minutes otherwise; what Nexon says about
-//! maintenance is read at that same pace. So a patch that is published with no maintenance
-//! underway can take ten minutes to show. To see it sooner, have a maintenance listed first
-//! and start the app after that (`fake_nexon maintenance <dir> announce --in 3`): the app
-//! then turns to it at the listed minute by its own clock, without asking again.
+//! while a maintenance is underway, and every ten minutes otherwise. What Nexon says about
+//! maintenance is read every ten minutes while none is underway, every half minute or
+//! closer while one is, and at the minute a listed one begins or is planned to end; see
+//! `maintenance`. So a patch that is published with no maintenance underway can take ten
+//! minutes to show. To see it sooner, have a maintenance listed first and start the app
+//! after that (`fake_nexon maintenance <dir> announce --in 3`): the app then turns to it at
+//! the listed minute, by the clock and without waiting for its next round.
 //!
 //! # The test world
 //!
@@ -180,12 +182,6 @@ pub(crate) struct StandIns {
     board: Option<String>,
     version: Option<u32>,
     refuse_real: bool,
-    /// The folder that stands in for the one the Nexon installer registered, and the version
-    /// the registry gives for it. Only a test has one: a made-up install is otherwise a
-    /// folder the registry knows nothing of, and what holds for the registered install
-    /// could not be tried on one.
-    #[cfg(test)]
-    registered: Option<(PathBuf, u32)>,
 }
 
 impl StandIns {
@@ -212,8 +208,6 @@ impl StandIns {
                 board: address("BOARD"),
                 version: of_client("VERSION").and_then(|number| number.parse().ok()),
                 refuse_real: set("MFP_ALLOW_REAL").as_deref() != Some("1"),
-                #[cfg(test)]
-                registered: None,
             }
         }
         #[cfg(not(debug_assertions))]
@@ -226,15 +220,7 @@ impl StandIns {
     /// What stands in and what is turned down, for a line in the log. `None` when nothing
     /// is, as in every release build.
     pub(crate) fn told(&self) -> Option<String> {
-        let StandIns {
-            patch_files,
-            inspection,
-            board,
-            version,
-            refuse_real,
-            #[cfg(test)]
-                registered: _,
-        } = self;
+        let StandIns { patch_files, inspection, board, version, refuse_real } = self;
         let told: Vec<String> = [
             patch_files.as_ref().map(|from| format!("patch files from {from}")),
             inspection.as_ref().map(|at| format!("inspection service at {at}")),
@@ -272,19 +258,6 @@ impl StandIns {
         self.version
     }
 
-    /// The folder that stands in for the registered install, and the version the registry
-    /// gives for it. No build that is given out or tried by hand has one.
-    pub(crate) fn registered(&self) -> Option<(&Path, u32)> {
-        #[cfg(test)]
-        {
-            self.registered.as_ref().map(|(dir, version)| (dir.as_path(), *version))
-        }
-        #[cfg(not(test))]
-        {
-            None
-        }
-    }
-
     /// Whether `dir` is turned down as an install folder: it is where a real game lives,
     /// and this build leaves those alone. That is a folder under `Nexon`, by its path as
     /// given or by where that leads, and the folder the Nexon installer registered wherever
@@ -300,13 +273,6 @@ impl StandIns {
         StandIns { version: Some(version), ..StandIns::default() }
     }
 
-    /// Stand-ins with `dir` as the folder the Nexon installer registered and `version` as
-    /// what the registry gives for it, for tests of what holds for the registered install.
-    #[cfg(test)]
-    pub(crate) fn registered_at(dir: &Path, version: u32) -> StandIns {
-        StandIns { registered: Some((dir.to_path_buf(), version)), ..StandIns::default() }
-    }
-
     /// The live game's stand-ins in a session against a made-up world, for tests of what
     /// asks them. They are put together here, so that such a test is the same in any build.
     #[cfg(test)]
@@ -317,7 +283,6 @@ impl StandIns {
             board: Some("http://127.0.0.1:18421/board".to_owned()),
             version: Some(900),
             refuse_real: true,
-            registered: None,
         }
     }
 }
@@ -331,6 +296,7 @@ fn under_nexon(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
     /// Looks a variable up among `set`, as the environment would.
     fn among(set: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
@@ -382,7 +348,6 @@ mod tests {
                 board: Some("http://127.0.0.1:18421/board".to_owned()),
                 version: Some(900),
                 refuse_real: false,
-                registered: None,
             }
         );
         let test = StandIns::read(Server::Test, &among(SESSION));
@@ -394,7 +359,6 @@ mod tests {
                 board: Some("http://127.0.0.1:18422/board-test".to_owned()),
                 version: Some(1900),
                 refuse_real: false,
-                registered: None,
             }
         );
     }
@@ -494,13 +458,17 @@ mod tests {
         );
         let refusing = StandIns { refuse_real: true, ..StandIns::default() };
         assert!(refusing.refuses(Path::new(r"C:\Nexon\Maple"), || false));
-        assert!(!refusing.refuses(Path::new(r"C:\MapleFastPatchTest\World\live\install"), || false));
+        // A folder that is not under `Nexon` as it is written is looked at for where it
+        // leads. These two are made up for the test: no folder of this PC's own is.
+        let scratch = Scratch::new("refuses");
+        let (made_up, copy) = (scratch.0.join("World").join("install"), scratch.0.join("Games").join("Maple"));
+        assert!(!refusing.refuses(&made_up, || false));
         // The folder the Nexon installer registered is the real game wherever it is.
-        assert!(refusing.refuses(Path::new(r"D:\Games\Maple"), || true));
+        assert!(refusing.refuses(&copy, || true));
         // Nor is the registry asked about a folder that is turned down already, or by a
         // build that turns nothing down.
         let never = || -> bool { panic!("asked whether the folder is registered") };
         assert!(refusing.refuses(Path::new(r"C:\Nexon\Maple"), never));
-        assert!(!StandIns::default().refuses(Path::new(r"D:\Games\Maple"), never));
+        assert!(!StandIns::default().refuses(&copy, never));
     }
 }

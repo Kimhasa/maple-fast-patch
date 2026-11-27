@@ -10,8 +10,6 @@ use mfp_engine::Stage;
 use mfp_engine::detect::Checksums;
 use mfp_engine::plan::Plan;
 use mfp_engine::preflight::{self, Problem, Programs};
-#[cfg(test)]
-use mfp_engine::run::Room;
 use mfp_kms::{Client, Server, notice};
 use serde::Serialize;
 
@@ -20,9 +18,10 @@ use crate::harness::StandIns;
 use crate::log::log_line;
 use crate::maintenance::Told;
 use crate::measure::Measure;
+use crate::rights::Standing;
 use crate::settings::Settings;
 use crate::update::Update;
-use crate::wording::{APP_TITLE, describe_problem, sentence};
+use crate::wording::{APP_TITLE, describe_problem, quit_first, sentence};
 
 /// What the whole app shares: what the user has set, the one patch run there is at a time,
 /// and a [`Site`] for each client.
@@ -31,12 +30,21 @@ pub(crate) struct Patcher {
     /// and one more, or nothing. There is one run at a time, whichever client it is for.
     running: AtomicU8,
     pub(crate) stop: Arc<AtomicBool>,
-    /// The window was asked to close during a run; the app exits once the run has stopped.
+    /// The run at work was asked to stop so that the app can go: the window was closed
+    /// again over the question it had open, or the user said that the app is to end. The
+    /// app exits once the run has stopped.
     pub(crate) closing: AtomicBool,
     /// The window was closed on a run, and the user said that the run is to go on: the
     /// window is put away and the app is next to the clock for the time being, though it is
     /// not set to stay there. Until the window is brought back.
     put_away: AtomicBool,
+    /// The app is about to start itself again with administrator rights, and leave: Windows
+    /// is asking the user. Nothing is begun meanwhile that leaving would cut off; see
+    /// [`crate::rights`].
+    pub(crate) restarting: AtomicBool,
+    /// Windows was asked for administrator rights in this session and did not give them, or
+    /// this copy of the app is the one that was started for them. It is not asked again.
+    pub(crate) rights_declined: AtomicBool,
     pub(crate) settings: Mutex<Settings>,
     /// Word of a newer version of this app, when its home was last read and had one.
     pub(crate) update: Mutex<Option<Update>>,
@@ -47,8 +55,12 @@ pub(crate) struct Patcher {
     /// The app's home is to be asked again now, without waiting for the day to pass: a
     /// maintenance has begun, which is when patches come out.
     pub(crate) update_due: AtomicBool,
-    /// The app's data folder, where the settings and the log are kept.
+    /// The app's data folder, where the settings, the size of the window and the log are
+    /// kept.
     pub(crate) data: PathBuf,
+    /// The version of the app that runs, as the notice of a newer one compares it: what a
+    /// report that is copied out of the app says it came from.
+    pub(crate) version: String,
     /// One for each client the app looks after: the live game first, then the test world.
     pub(crate) sites: Vec<Site>,
 }
@@ -70,17 +82,20 @@ impl Patcher {
             stop: Arc::default(),
             closing: AtomicBool::new(false),
             put_away: AtomicBool::new(false),
+            restarting: AtomicBool::new(false),
+            rights_declined: AtomicBool::new(false),
             settings: Mutex::new(Settings::load(&data)),
             update: Mutex::default(),
             update_asked: AtomicBool::new(false),
             update_due: AtomicBool::new(false),
             data,
+            version: env!("CARGO_PKG_VERSION").to_owned(),
             sites,
         }
     }
 
     /// The site of the client of `server`, if the app looks after that client.
-    pub(crate) fn site(&self, server: Server) -> Option<&Site> {
+    fn site(&self, server: Server) -> Option<&Site> {
         self.sites.iter().find(|site| site.client.server == server)
     }
 
@@ -140,6 +155,62 @@ impl Patcher {
     pub(crate) fn brought_back(&self) -> bool {
         self.put_away.swap(false, Ordering::SeqCst)
     }
+
+    /// Whether a run is at work, or none may begin because the app is about to leave and
+    /// start itself again; see [`Patcher::restarting`]. Either way nothing is begun.
+    pub(crate) fn turn_taken(&self) -> bool {
+        self.running().is_some() || self.restarting.load(Ordering::SeqCst)
+    }
+
+    /// Where the app stands with administrator rights and with what starting itself again
+    /// would cut off; see [`Standing`]. `elevated` says whether it runs with them.
+    pub(crate) fn standing(&self, elevated: bool) -> Standing {
+        let putting_back = |site: &Site| {
+            let seen = site.flow.lock().unwrap().status.as_ref().is_some_and(|status| status.putting_back);
+            seen || site.heal.lock().unwrap().at_work
+        };
+        // The window was closed on a run, or an address waits for the user's yes.
+        let asked = |site: &Site| {
+            let closing = site.flow.lock().unwrap().run.as_ref().is_some_and(|run| run.asking);
+            closing || site.asked_about.lock().unwrap().is_some()
+        };
+        Standing {
+            elevated,
+            declined: self.rights_declined.load(Ordering::SeqCst),
+            run_at_work: self.running().is_some(),
+            putting_back: self.sites.iter().any(putting_back),
+            question_open: self.sites.iter().any(asked),
+        }
+    }
+}
+
+/// What the registry says of a client's install: where the Nexon installer registered it,
+/// and which version it gives for it.
+///
+/// A site asks through this, and the app asks Windows (see [`Windows`]). So what holds for
+/// a registered install, and for a PC that has none, is tried on made-up folders: a test
+/// answers in Windows' place, and looks at no folder a real game is in.
+pub(crate) trait Registry: Send + Sync {
+    /// The folder the Nexon installer registered for the client, if it is there.
+    fn install_dir(&self) -> Option<PathBuf>;
+
+    /// What the registry gives for the version of that install, as the patch files count
+    /// it. A guess; see [`Client::version_hint`].
+    fn version(&self) -> Option<u32>;
+}
+
+/// The registry of this PC, asked about one client; see [`Client::find_install_dir`] and
+/// [`Client::version_hint`].
+struct Windows(&'static Client);
+
+impl Registry for Windows {
+    fn install_dir(&self) -> Option<PathBuf> {
+        self.0.find_install_dir()
+    }
+
+    fn version(&self) -> Option<u32> {
+        self.0.version_hint()
+    }
 }
 
 /// One client's side of the app: where its game is installed, what the app keeps about that
@@ -151,6 +222,8 @@ pub(crate) struct Site {
     pub(crate) data: PathBuf,
     /// What a build made for trying the app out puts in the place of Nexon's side.
     stand_ins: StandIns,
+    /// What says where the client's install is registered, and at which version.
+    registry: Box<dyn Registry>,
     /// What the site's desk knows and has told the page; see [`Flow`]. Whoever changes it
     /// wakes the desk through `woken`, which goes with this lock.
     pub(crate) flow: Mutex<Flow>,
@@ -161,8 +234,9 @@ pub(crate) struct Site {
     /// What a check last worked out, and for which install folder; see
     /// [`availability`](crate::offer::availability).
     pub(crate) found: Mutex<Option<Found>>,
-    /// Held by a check, and by a run, for as long as it works on the patch cache and the
-    /// install folder, so that no two of them ever do so at once.
+    /// Held by a check, by a run, and by whoever removes what a run left, for as long as it
+    /// works on the patch cache and the install folder, so that no two of them ever do so at
+    /// once.
     pub(crate) busy: Mutex<()>,
     /// Set to make a check that is at work give up: the folder it is about was left, or a
     /// run wants to start. Each check clears it when it begins.
@@ -171,10 +245,6 @@ pub(crate) struct Site {
     pub(crate) heal: Mutex<Heal>,
     /// What is known of the patch file on this PC that a run would apply; see [`PatchRead`].
     pub(crate) read: Mutex<PatchRead>,
-    /// What a run is taken to ask of the drive, in place of what a patch file says: tests
-    /// have no patch file to read it from.
-    #[cfg(test)]
-    pub(crate) made_room: Mutex<Option<Room>>,
     /// Checksums of install files read so far, and the install folder they are of.
     pub(crate) checksums: Mutex<(PathBuf, Checksums)>,
     /// Last write test of the install folder and when it was made.
@@ -196,15 +266,25 @@ pub(crate) struct Site {
     /// this client's own patch files. See
     /// [`confirm_patch_address`](crate::patching::confirm_patch_address).
     pub(crate) asked_about: Mutex<Option<String>>,
+    /// Where the site is with the diagnosis of its PC; see [`crate::diagnosis`].
+    pub(crate) diagnosis: Mutex<crate::diagnosis::Diagnosed>,
 }
 
 impl Site {
-    /// The site of `client` as the app starts, keeping its files in `data`.
-    pub(crate) fn new(client: &'static Client, data: PathBuf, stand_ins: StandIns) -> Site {
+    /// The site of `client` as the app starts, keeping its files in `data`. Where the
+    /// client's install is registered is asked of this PC's registry.
+    fn new(client: &'static Client, data: PathBuf, stand_ins: StandIns) -> Site {
+        Site::of(client, data, stand_ins, Box::new(Windows(client)))
+    }
+
+    /// The site of `client` as the app starts, keeping its files in `data`, with `registry`
+    /// as what says where the client's install is registered.
+    pub(crate) fn of(client: &'static Client, data: PathBuf, stand_ins: StandIns, registry: Box<dyn Registry>) -> Site {
         Site {
             client,
             data,
             stand_ins,
+            registry,
             flow: Mutex::new(Flow::new(Instant::now())),
             woken: Condvar::new(),
             looking: Mutex::default(),
@@ -213,8 +293,6 @@ impl Site {
             check_stop: Arc::default(),
             heal: Mutex::default(),
             read: Mutex::default(),
-            #[cfg(test)]
-            made_room: Mutex::default(),
             checksums: Mutex::default(),
             write_test: Mutex::default(),
             told: Mutex::default(),
@@ -223,6 +301,7 @@ impl Site {
             measure: Mutex::default(),
             report: Mutex::default(),
             asked_about: Mutex::default(),
+            diagnosis: Mutex::default(),
         }
     }
 
@@ -291,22 +370,16 @@ impl Site {
     }
 
     /// The folder the Nexon installer registered for the client; see
-    /// [`Client::find_install_dir`].
+    /// [`Registry::install_dir`].
     pub(crate) fn registered_dir(&self) -> Option<PathBuf> {
-        match self.stand_ins.registered() {
-            Some((dir, _)) => Some(dir.to_path_buf()),
-            None => self.client.find_install_dir(),
-        }
+        self.registry.install_dir()
     }
 
     /// What the registry gives for the version of the registered install; see
-    /// [`Client::version_hint`]. It is where the look for the folder's patches starts, and
+    /// [`Registry::version`]. It is where the look for the folder's patches starts, and
     /// proves nothing about the folder.
     pub(crate) fn registry_version(&self) -> Option<u32> {
-        match self.stand_ins.registered() {
-            Some((_, version)) => Some(version),
-            None => self.client.version_hint(),
-        }
+        self.registry.version()
     }
 
     /// The registry's guess at the installed version, for an install folder that is not the
@@ -421,6 +494,10 @@ pub(crate) struct Found {
     /// Whether the server has a main patch from `version`, and the newest minor of `version`.
     pub(crate) main: bool,
     pub(crate) newest_minor: u32,
+    /// The newest version on the server as it counts them, with the newest minor of that
+    /// version, where the check followed the patches there all the way: what the diagnosis
+    /// is told the server has. Not where the newest was only seen in an earlier check.
+    pub(crate) newest: Option<(u32, u32)>,
     pub(crate) target: Option<Target>,
     /// The newest version on the server.
     pub(crate) latest: String,
@@ -438,7 +515,7 @@ impl Found {
 /// A patch file on Nexon's server that this install can take.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Target {
-    /// Version the patch leads to, such as `1.2.422` or `1.2.421 (4)`.
+    /// Version the patch leads to, such as `Ver 1.2.422` or `Ver 1.2.421 마이너버전(4)`.
     pub(crate) label: String,
     pub(crate) size: u64,
     /// Where the file is on the server and what it is kept as on this PC.
@@ -466,7 +543,7 @@ impl Target {
 #[derive(Clone)]
 pub(crate) struct Status {
     pub(crate) install_dir: Option<String>,
-    /// Installed version, such as `1.2.421`, when it is known.
+    /// Installed version, such as `Ver 1.2.421`, when it is known.
     pub(crate) version: Option<String>,
     /// Where the patch from that version to the next one would be published. It is what the
     /// user is given to begin from when they state an address themselves and the app has
@@ -489,9 +566,10 @@ pub(crate) struct Status {
     /// That run replaced game files as it built them, so the folder is partly new. Only
     /// finishing the same patch makes it whole; its files exist nowhere else.
     pub(crate) half_patched: bool,
-    /// That run was cut off while applying, and the record it kept so that the apply could
-    /// be undone cannot be read. Nothing can go on over it and nothing puts it back: what
-    /// the run left can only be removed as it is, which leaves the folder a mix.
+    /// That run was cut off while applying, the record it kept so that the apply could be
+    /// undone cannot be read, and the folder could not be put back without it either.
+    /// Nothing can go on over it and nothing puts it back: what the run left can only be
+    /// removed as it is, which leaves the folder a mix.
     pub(crate) unreadable_journal: bool,
     /// An apply was cut off in the folder and is being undone, or is about to be. Until it
     /// is, the folder is neither version: nothing is said of it and nothing starts in it.
@@ -503,6 +581,10 @@ pub(crate) struct Status {
     /// app has never been tried on (see [`Site::untried`]), and it has not patched this
     /// folder before.
     pub(crate) by_press_only: bool,
+    /// What a run of the patch that is waiting asks the drive to have free, in bytes, the
+    /// usual way and the immediate way: known once all of the patch file is on this PC and
+    /// what it does has been read. The diagnosis is told it; see [`crate::diagnosis`].
+    pub(crate) room: Option<(u64, u64)>,
 }
 
 impl Status {
@@ -532,8 +614,8 @@ impl Status {
     }
 
     /// Whether removing what a run left here cannot be made good by this app, so that the
-    /// user is asked before it is removed: the folder is partly new, or the record of an
-    /// apply that was cut off in it cannot be read.
+    /// user is asked before it is removed: the folder is partly new, or an apply that was
+    /// cut off in it cannot be undone (see [`Status::unreadable_journal`]).
     pub(crate) fn discard_asks(&self) -> bool {
         self.half_patched || self.unreadable_journal
     }
@@ -548,7 +630,8 @@ pub(crate) enum CheckKind {
     Running,
     /// Files can be written to the install folder.
     Writable,
-    /// The drive has room for the patch file.
+    /// The drive has room: for the patch file, and once that is on this PC and read, for
+    /// what a run of it needs by the way of patching that is chosen.
     Space,
     /// An apply that was cut off could be undone.
     Recovery,
@@ -558,11 +641,13 @@ pub(crate) enum CheckKind {
 }
 
 impl CheckKind {
-    /// What the line is called on the screen.
+    /// What the line is called on the screen. The line for the game being open has no
+    /// name: it only shows while the game is, and then says what it asks in the place of
+    /// one; see [`Check::game_open`].
     fn label(self) -> &'static str {
         match self {
             CheckKind::Folder => "설치 경로",
-            CheckKind::Running => "관련 프로그램 실행 중",
+            CheckKind::Running => "",
             CheckKind::Writable => "쓰기 권한",
             CheckKind::Space => "여유 공간",
             CheckKind::Recovery => "패치 복구",
@@ -574,7 +659,9 @@ impl CheckKind {
 #[derive(Clone)]
 pub(crate) struct Check {
     pub(crate) kind: CheckKind,
-    pub(crate) label: &'static str,
+    /// What stands at the left of the line: what it is called, or, of the game being open,
+    /// what the user is asked to do about it.
+    pub(crate) label: String,
     pub(crate) ok: bool,
     /// Shown only when it fails; passing needs no line on the screen.
     pub(crate) quiet: bool,
@@ -587,16 +674,26 @@ pub(crate) struct Check {
 
 impl Check {
     pub(crate) fn passed(kind: CheckKind, detail: impl Into<String>) -> Check {
-        Check { kind, label: kind.label(), ok: true, quiet: false, detail: detail.into(), message: String::new() }
+        let label = kind.label().to_owned();
+        Check { kind, label, ok: true, quiet: false, detail: detail.into(), message: String::new() }
     }
 
     pub(crate) fn failed(kind: CheckKind, detail: impl Into<String>, message: impl Into<String>) -> Check {
-        Check { kind, label: kind.label(), ok: false, quiet: false, detail: detail.into(), message: message.into() }
+        let label = kind.label().to_owned();
+        Check { kind, label, ok: false, quiet: false, detail: detail.into(), message: message.into() }
     }
 
     pub(crate) fn quiet(mut self) -> Check {
         self.quiet = true;
         self
+    }
+
+    /// The line for the game called `game` being open, which is in the way of a patch. It
+    /// asks the user to close the game, and a dialog asks the same in the same words.
+    /// Which of the game's programs are open is not on the screen: few know them by name.
+    pub(crate) fn game_open(game: &str) -> Check {
+        let asks = quit_first(game);
+        Check { label: asks.clone(), ..Check::failed(CheckKind::Running, "", asks).quiet() }
     }
 
     /// Turns an engine check into a line: passed when it found no problems. `game` is what
@@ -655,9 +752,11 @@ impl From<Stage> for Step {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::made::Registered;
 
+    /// A site of `client` on a PC whose registry knows of no install of it.
     fn site(client: &'static Client, stand_ins: StandIns) -> Site {
-        Site::new(client, PathBuf::from("data"), stand_ins)
+        Site::of(client, PathBuf::from("data"), stand_ins, Registered::nowhere())
     }
 
     /// What the live game's site asks for and where, written out as the release before the
@@ -675,9 +774,30 @@ mod tests {
         assert_eq!(asked_at, "https://api.maplestory.nexon.com/soap/maplestory.asmx");
         assert_eq!(service.action, "https://api.maplestory.nexon.com/soap/GetInspectionInfo");
         assert_eq!(live.board(), "https://maplestory.nexon.com/News/Notice/Inspection");
-        assert_eq!(live.version_guess(), mfp_kms::LIVE.version_hint());
         assert_eq!(live.stand_ins_told(), None);
         assert!(!live.refuses(Path::new(r"C:\Nexon\Maple"), || true));
+    }
+
+    /// Where a client's install is registered, and which version the registry gives for
+    /// it, is what the site's registry says: Windows' own in the app, and a made-up one
+    /// here, so that neither case hangs on what is installed on the PC the tests run on.
+    #[test]
+    fn a_site_goes_by_what_its_registry_says_of_the_install() {
+        let install = Path::new("games").join("Maple");
+        let registered =
+            |stand_ins| Site::of(&mfp_kms::LIVE, PathBuf::from("data"), stand_ins, Registered::at(&install, 421));
+        let live = registered(StandIns::default());
+        assert_eq!(live.registered_dir(), Some(install.clone()));
+        assert_eq!((live.registry_version(), live.version_guess()), (Some(421), Some(421)));
+        // What a build for trying the app out puts in the place of the registry's guess
+        // goes before it, and leaves what the registry says of its own install alone.
+        let stood_in = registered(StandIns::at_version(900));
+        assert_eq!((stood_in.registry_version(), stood_in.version_guess()), (Some(421), Some(900)));
+
+        // No install is registered: nothing is found, and nothing is guessed.
+        let none = site(&mfp_kms::LIVE, StandIns::default());
+        assert_eq!((none.registered_dir(), none.registry_version(), none.version_guess()), (None, None, None));
+        assert_eq!(site(&mfp_kms::LIVE, StandIns::at_version(900)).version_guess(), Some(900));
     }
 
     #[test]
@@ -697,8 +817,7 @@ mod tests {
         assert_eq!(live.programs(), site(&mfp_kms::LIVE, StandIns::default()).programs());
     }
 
-    /// Nothing in the app is a site of the test world yet. One would be this client's in
-    /// everything that tells the two apart.
+    /// The site of the test world is this client's in everything that tells the two apart.
     #[test]
     fn a_site_is_its_clients_own() {
         let test = site(&mfp_kms::TEST, StandIns::default());
@@ -713,7 +832,7 @@ mod tests {
     fn a_patch_is_of_the_kind_nexons_notices_call_it() {
         let main = crate::made::target("1.2.422");
         assert_eq!(main.kind(), "클라이언트 패치");
-        let minor = Target { label: "1.2.421 (4)".to_owned(), version: 421, minor: Some(4), ..main };
+        let minor = Target { label: "1.2.421 마이너버전(4)".to_owned(), version: 421, minor: Some(4), ..main };
         assert_eq!(minor.kind(), "마이너 패치");
     }
 
@@ -772,7 +891,7 @@ mod tests {
         assert!(game.game_folder() && game.askable() && !game.blocked());
 
         // The game is open: in the way of a patch, and nothing to do with what the server has.
-        let open = Check::failed(CheckKind::Running, "MapleStory.exe", "게임 관련 프로그램이 실행 중입니다.").quiet();
+        let open = Check::game_open("메이플스토리");
         let playing = status(Some(r"C:\Games\Maple"), vec![Check::passed(CheckKind::Folder, ""), open]);
         assert!(playing.game_folder() && playing.askable() && playing.blocked());
 
@@ -781,7 +900,7 @@ mod tests {
         assert!(!empty.game_folder() && !empty.askable() && empty.blocked());
         assert!(!status(None, vec![no_game.clone()]).askable());
 
-        // A folder whose game program lies among the backups of an apply that was cut off:
+        // A folder whose game program lies where an apply that was cut off moved it aside:
         // no game folder as it stands, and a check says that it is being put back.
         let cut_off = Check::failed(CheckKind::Recovery, "실패", "이전 패치를 복구하지 못했습니다.");
         let waiting = status(Some(r"C:\Games\Maple"), vec![no_game, cut_off]);
@@ -832,5 +951,54 @@ mod tests {
         assert_eq!((holder(live), holder(test)), (None, None));
         assert!(patcher.begin_run(test));
         assert_eq!((holder(live), holder(test)), (Some(Server::Test), None));
+    }
+
+    /// Where the app stands with what starting itself again would cut off: a run of either
+    /// client, a folder being put back, a question the user has not answered.
+    #[test]
+    fn the_app_knows_what_leaving_would_cut_off() {
+        let sites = vec![site(&mfp_kms::LIVE, StandIns::default()), site(&mfp_kms::TEST, StandIns::default())];
+        let patcher = Patcher::of(PathBuf::from("data"), sites);
+        let (live, test) = (&patcher.sites[0], &patcher.sites[1]);
+        let free = Standing {
+            elevated: false,
+            declined: false,
+            run_at_work: false,
+            putting_back: false,
+            question_open: false,
+        };
+        assert_eq!(patcher.standing(false), free);
+        assert_eq!(patcher.standing(true), Standing { elevated: true, ..free });
+        assert!(free.restarts(true) && !patcher.turn_taken());
+
+        // A run of either client, at work or stopping: the turn is taken until it has ended.
+        assert!(patcher.begin_run(test));
+        assert_eq!(patcher.standing(false), Standing { run_at_work: true, ..free });
+        assert!(patcher.turn_taken());
+        patcher.end_run();
+
+        // A folder that an attempt is putting back, or that the last look found waiting for it.
+        test.heal.lock().unwrap().at_work = true;
+        assert_eq!(patcher.standing(false), Standing { putting_back: true, ..free });
+        test.heal.lock().unwrap().at_work = false;
+        let waiting = Status { putting_back: true, ..crate::made::folder(Some("games"), Vec::new()) };
+        live.flow.lock().unwrap().take_look(waiting, Instant::now());
+        assert_eq!(patcher.standing(false), Standing { putting_back: true, ..free });
+        live.flow.lock().unwrap().take_look(crate::made::folder(Some("games"), Vec::new()), Instant::now());
+        assert_eq!(patcher.standing(false), free);
+
+        // An address that waits for the user's yes.
+        *live.asked_about.lock().unwrap() = Some("https://download.nexon.com/a.patch".to_owned());
+        assert_eq!(patcher.standing(false), Standing { question_open: true, ..free });
+        live.asked_about.lock().unwrap().take();
+
+        // Turned down by Windows once, the app does not ask again in this session.
+        patcher.rights_declined.store(true, Ordering::SeqCst);
+        assert_eq!(patcher.standing(false), Standing { declined: true, ..free });
+        patcher.rights_declined.store(false, Ordering::SeqCst);
+
+        // While the app is about to leave, no run begins: the turn counts as taken.
+        patcher.restarting.store(true, Ordering::SeqCst);
+        assert!(patcher.turn_taken() && patcher.running().is_none());
     }
 }

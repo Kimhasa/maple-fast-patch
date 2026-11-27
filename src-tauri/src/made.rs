@@ -1,8 +1,41 @@
 //! Made-up looks at an install folder and answers of the server, for the tests of the rules
-//! that go by them.
+//! that go by them, and the registry of a made-up PC for the tests that need a site.
+
+use std::path::{Path, PathBuf};
 
 use crate::flow::Run;
-use crate::state::{Availability, Check, CheckKind, Status, Target};
+use crate::state::{Availability, Check, CheckKind, Registry, Status, Target};
+
+/// What the registry of a made-up PC says of a client's install. A test hands it to the
+/// site it makes (see [`Site::of`](crate::state::Site::of)), which then asks it in Windows'
+/// place: no test looks at the registry of the PC it runs on, or at the folder a real game
+/// is in, and none comes out another way for what is installed there.
+pub(crate) struct Registered(Option<(PathBuf, u32)>);
+
+impl Registered {
+    /// No install of the client is registered, and the registry gives no version: a PC
+    /// the game was never installed on, or one whose game is a copy the registry knows
+    /// nothing of.
+    pub(crate) fn nowhere() -> Box<Registered> {
+        Box::new(Registered(None))
+    }
+
+    /// The client's install is registered at `dir`, with `version` as what the registry
+    /// gives for it: the install nobody had to pick.
+    pub(crate) fn at(dir: &Path, version: u32) -> Box<Registered> {
+        Box::new(Registered(Some((dir.to_path_buf(), version))))
+    }
+}
+
+impl Registry for Registered {
+    fn install_dir(&self) -> Option<PathBuf> {
+        self.0.as_ref().map(|(dir, _)| dir.clone())
+    }
+
+    fn version(&self) -> Option<u32> {
+        self.0.as_ref().map(|(_, version)| *version)
+    }
+}
 
 /// Addresses the user gives for a patch, each another than that of the patch a check finds
 /// (see [`target`]): the tests of the rules for a run by address tell them apart by these.
@@ -29,6 +62,7 @@ pub(crate) fn folder(dir: Option<&str>, checks: Vec<Check>) -> Status {
         putting_back: false,
         unread_patch: None,
         by_press_only: false,
+        room: None,
     }
 }
 
@@ -45,7 +79,7 @@ pub(crate) fn game_at(dir: &str) -> Status {
 }
 
 /// The same folder with `check` in the place of the check of its kind.
-pub(crate) fn with_check(mut status: Status, check: Check) -> Status {
+fn with_check(mut status: Status, check: Check) -> Status {
     match status.checks.iter_mut().find(|known| known.kind == check.kind) {
         Some(known) => *known = check,
         None => status.checks.push(check),
@@ -55,8 +89,7 @@ pub(crate) fn with_check(mut status: Status, check: Check) -> Status {
 
 /// The same folder with the game open in it.
 pub(crate) fn game_open(status: Status) -> Status {
-    let message = "게임 관련 프로그램이 실행 중입니다.\n해당 프로그램을 종료해 주세요.";
-    with_check(status, Check::failed(CheckKind::Running, "MapleStory.exe", message).quiet())
+    with_check(status, Check::game_open("메이플스토리"))
 }
 
 /// The same folder on a drive without the room for the patch file.

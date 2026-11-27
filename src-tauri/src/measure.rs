@@ -10,7 +10,7 @@ use crate::records::Left;
 use crate::state::Patcher;
 #[cfg(windows)]
 use crate::wide::to_wide;
-use crate::wording::{APP_NAME, drive_letter, size_label, speed, whole_gb};
+use crate::wording::{APP_NAME, drive_letter, minutes_and_seconds, size_label, speed, whole_gb};
 
 /// How a patch went, for the text a tester can copy once it is done.
 ///
@@ -117,11 +117,10 @@ pub(crate) fn drive_size(dir: &Path) -> Option<u64> {
 /// It is made to be passed on, so it names the game's drive by its letter and nothing else
 /// of this PC: no folder, no user name, no computer name.
 pub(crate) fn report_text(app: &AppHandle, measure: &Measure, seconds: u64, outcome: &Outcome) -> String {
-    let took = if seconds >= 60 { format!("{}분 {}초", seconds / 60, seconds % 60) } else { format!("{seconds}초") };
     let mut lines = vec![
         format!("{APP_NAME} {} 측정 결과", app.package_info().version),
         format!("패치: {} ({}, 변경 파일 {}개)", measure.label, size_label(measure.size), outcome.files_changed),
-        format!("소요 시간: {took}"),
+        format!("소요 시간: {}", minutes_and_seconds(seconds)),
     ];
     lines.extend(step_lines(measure));
     lines.extend(notes(measure, outcome.immediate));
@@ -168,8 +167,8 @@ pub(crate) fn report_text(app: &AppHandle, measure: &Measure, seconds: u64, outc
 /// patch in this session.
 ///
 /// A step no run of the patch went through has no line: the download of a file that was
-/// picked, or of one that was on this PC already when the first of these runs began. A
-/// step that an earlier run went through keeps its time, whatever the last run did.
+/// on this PC already when the first of these runs began. A step that an earlier run went
+/// through keeps its time, whatever the last run did.
 fn step_lines(measure: &Measure) -> Vec<String> {
     let went_through = STEPS.iter().zip(measure.steps).filter(|(_, took)| !took.is_zero());
     went_through

@@ -18,7 +18,9 @@ use crate::state::{Patcher, Site};
 pub(crate) struct Update {
     /// The newer version, as its home writes it: `0.2.0`.
     latest: String,
-    /// The version running is older than the oldest one that is still to be used.
+    /// The version running is older than the oldest one that is still to be used. The app
+    /// then says so on the ready screen and begins no patch by itself; it keeps the user
+    /// from nothing.
     pub(crate) required: bool,
     /// A line that goes with it, when the home gives one.
     message: Option<String>,
@@ -28,6 +30,8 @@ pub(crate) struct Update {
 /// had. Both are fixed here: nothing that is read from the network decides what is opened.
 const NOTICE_URL: &str = "https://raw.githubusercontent.com/Kimhasa/maple-fast-patch/HEAD/notice.json";
 const RELEASES_URL: &str = "https://github.com/Kimhasa/maple-fast-patch/releases/latest";
+/// Where bugs in this app are reported: an open chat on KakaoTalk.
+const BUG_REPORTS_URL: &str = "https://open.kakao.com/o/sERUmQYi";
 
 /// A version as the notice may give it: up to three numbers of up to five digits each, with
 /// dots between them. Anything else is not taken for a version.
@@ -96,8 +100,8 @@ const AFTER_A_MAINTENANCE_BEGINS_WITHIN: u64 = 10;
 /// That is all it does. Nothing is downloaded or installed; the screen gets a line that
 /// says so, and the user decides.
 ///
-/// A version that is too old to patch with is not to patch by itself either, and only this
-/// look tells it that it is one. So the app does nothing by itself before the first look
+/// A version that is too old is not to patch by itself, and only this look tells it that it
+/// is one. So the app does nothing by itself before the first look
 /// was made (see [`decide`](crate::flow::decide)), which is why that look comes at once.
 /// It waits for the look, not for an answer: an app that cannot reach its home works like
 /// one whose home has nothing to say. A patch comes out during a maintenance, so that is
@@ -136,8 +140,8 @@ pub(crate) fn watch_updates(app: AppHandle) {
             match read {
                 Ok(update) => {
                     let before = std::mem::replace(&mut *patcher.update.lock().unwrap(), update.clone());
-                    // The page shows it, and a version that is too old to patch with
-                    // changes what every screen says and offers.
+                    // The page shows it, and a version that is too old changes what the
+                    // ready screen says.
                     if before != update {
                         tell_app(&app, &patcher);
                     }
@@ -157,6 +161,18 @@ pub(crate) fn watch_updates(app: AppHandle) {
             }
         }
     });
+}
+
+/// Opens the page where bugs in this app are reported. Which page that
+/// is, only this file says: the page cannot name an address.
+///
+/// Where it could not be opened, nothing is said: the one sentence the app has for a page
+/// that did not open is about the page a download is on. The log says so.
+#[tauri::command]
+pub(crate) fn open_bug_report_page(app: AppHandle) {
+    if app.opener().open_url(BUG_REPORTS_URL, None::<&str>).is_err() {
+        log_line("could not open the page for bug reports");
+    }
 }
 
 /// Opens the page a newer version of this app is downloaded from.

@@ -1,7 +1,7 @@
 //! A patch run: starting and stopping it, and turning what the engine reports into what
 //! the screen, the taskbar and the records show.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -84,7 +84,7 @@ impl Fetch {
 }
 
 fn site_named<'a>(patcher: &'a Patcher, server: &str) -> Result<&'a Site, Refusal> {
-    patcher.site_named(server).ok_or_else(|| Refusal::new(RefusalKind::Nothing, "설치 경로를 찾을 수 없습니다."))
+    patcher.site_named(server).ok_or_else(Refusal::no_folder)
 }
 
 /// Starts a patch run of what the screen offers for the client the page calls `server`; see
@@ -123,7 +123,7 @@ pub(crate) fn start_patch_at(
 pub(crate) fn confirm_patch_address(app: AppHandle, patcher: State<Patcher>, server: String) -> Result<(), Refusal> {
     let site = site_named(&patcher, &server)?;
     let asked_about = site.asked_about.lock().unwrap().take();
-    let address = asked_about.ok_or_else(|| Refusal::new(RefusalKind::Nothing, "적용할 패치가 없습니다."))?;
+    let address = asked_about.ok_or_else(Refusal::no_patch)?;
     begin(&app, &patcher, site, Wanted::At { address, agreed: true })
 }
 
@@ -152,7 +152,7 @@ fn fetched_safely(address: &str, trying_out: bool) -> bool {
 /// The folder is looked at first. What the desk last saw may be a few seconds old, and a
 /// run must not begin by that.
 pub(crate) fn begin(app: &AppHandle, patcher: &Patcher, site: &Site, wanted: Wanted) -> Result<(), Refusal> {
-    if patcher.running().is_some() {
+    if patcher.turn_taken() || site.diagnosis.lock().unwrap().checking() {
         return Err(Refusal::busy());
     }
     // An address is known from here on in the one spelling it is asked for in.
@@ -165,7 +165,6 @@ pub(crate) fn begin(app: &AppHandle, patcher: &Patcher, site: &Site, wanted: Wan
     if look_now(app, patcher, site).putting_back {
         return Err(Refusal::busy());
     }
-    let no_folder = || Refusal::new(RefusalKind::Nothing, "설치 경로를 찾을 수 없습니다.");
     // The patch and the folder it is for are taken from the same look, in one breath. A
     // folder that is changed in this very moment is not given the patch of the one before.
     let (picked, folder, continued) = {
@@ -173,11 +172,12 @@ pub(crate) fn begin(app: &AppHandle, patcher: &Patcher, site: &Site, wanted: Wan
         let flow = site.flow.lock().unwrap();
         let facts = flow.facts(&world);
         let picked = pick(&facts, address.as_deref(), flow.left())?;
-        let folder = flow.status.as_ref().and_then(|status| status.install_dir.clone()).ok_or_else(no_folder)?;
+        let folder =
+            flow.status.as_ref().and_then(|status| status.install_dir.clone()).ok_or_else(Refusal::no_folder)?;
         let continued = picked.address().is_some_and(|address| facts.continues(address));
         (picked, folder, continued)
     };
-    let (install_dir, place) = (PathBuf::from(&folder), patcher.place(site).ok_or_else(no_folder)?);
+    let (install_dir, place) = (PathBuf::from(&folder), patcher.place(site).ok_or_else(Refusal::no_folder)?);
     let fetch = match &picked.patch {
         Patch::Given(address) => {
             // The rule is held against every address a run is begun of, also one that is
@@ -213,7 +213,7 @@ pub(crate) fn begin(app: &AppHandle, patcher: &Patcher, site: &Site, wanted: Wan
                 return Err(Refusal::busy());
             }
             if !fetched_safely(&target.url, cfg!(debug_assertions)) {
-                return Err(Refusal::new(RefusalKind::Nothing, "적용할 패치가 없습니다."));
+                return Err(Refusal::no_patch());
             }
             Fetch::found(target)
         }
@@ -223,11 +223,33 @@ pub(crate) fn begin(app: &AppHandle, patcher: &Patcher, site: &Site, wanted: Wan
     let begun = update(app, patcher, site, |flow| {
         // Not for a folder the site has left in the meantime.
         let here = flow.status.as_ref().is_some_and(|status| status.install_dir.as_deref() == Some(folder.as_str()));
-        let free = here && patcher.begin_run(site);
+        let mut free = here && patcher.begin_run(site);
+        // An app that is about to leave and start itself again begins no run; see `rights`.
+        // Looked at once the turn is taken, as that side looks for a run once it has said
+        // so: one of the two sees the other, and no run is begun to be cut off.
+        if free && patcher.restarting.load(Ordering::SeqCst) {
+            patcher.end_run();
+            free = false;
+        }
+        // Nor is a run begun in a folder whose game files are being checked at the user's
+        // word; see `diagnosis`. Looked at once the turn is taken, as that side looks for a
+        // run once it has said that it checks: one of the two gives way. A diagnosis that
+        // is at work by itself is ended instead, and made anew when the run has ended.
+        if free {
+            let mut diagnosed = site.diagnosis.lock().unwrap();
+            if diagnosed.checking() {
+                patcher.end_run();
+                free = false;
+            } else {
+                diagnosed.put_off();
+            }
+        }
         if free {
             patcher.stop.store(false, Ordering::SeqCst);
             // A check still at work gives up, so the run does not have to wait for it. So
             // does one of another client: nobody asks the server while a run is at work.
+            // Said after the turn is taken, and in that order: a check that is only now
+            // beginning looks for a run once it has cleared this, and finds it.
             patcher.sites.iter().for_each(|any| any.check_stop.store(true, Ordering::SeqCst));
             flow.begin(&picked, Instant::now());
         }
@@ -260,7 +282,7 @@ fn run(app: &AppHandle, place: usize, install_dir: PathBuf, fetch: Fetch) {
     let source = Source::Url { url: fetch.url.clone(), dest: dest.clone() };
     let options = Options { install_dir, source, immediate: wishes.immediate, storage: wishes.storage.choice() };
     let mut reporter = Reporter::new(app.clone(), place);
-    reporter.download_to = Some(dest.clone());
+    reporter.download_to = dest.clone();
     reporter.patch = file_at(&fetch.url).to_owned();
     // A run of this same patch that was left unfinished is carried on: the bar starts
     // where it had come to and the time already spent counts, also after the app was
@@ -549,10 +571,9 @@ fn went_through(stage: Stage, whole: bool) -> bool {
 ///
 /// A trial takes its share out of the build's: it was timed at 17 s where the build took
 /// 93 s, which is 8 of the build's 50. A run without one (`tried` is not set) leaves the
-/// build all 50, so nothing about its figure changes. In a run without a download
-/// (`downloads` is not set) the steps after it share the whole bar.
-fn stretch(stage: Stage, tried: bool, downloads: bool) -> (f64, f64) {
-    let (start, span) = match stage {
+/// build all 50, so nothing about its figure changes.
+fn stretch(stage: Stage, tried: bool) -> (f64, f64) {
+    match stage {
         Stage::Download => (0.0, 30.0),
         Stage::VerifyPatch => (30.0, 3.0),
         Stage::VerifyInstall => (33.0, 12.0),
@@ -560,8 +581,7 @@ fn stretch(stage: Stage, tried: bool, downloads: bool) -> (f64, f64) {
         Stage::Rebuild if tried => (53.0, 42.0),
         Stage::Rebuild => (45.0, 50.0),
         Stage::Apply => (95.0, 5.0),
-    };
-    if downloads { (start, span) } else { ((start - 30.0) / 0.7, span / 0.7) }
+    }
 }
 
 /// Where the bar stands, 0 to 100, with `part` of a step's stretch done. It is never behind
@@ -601,13 +621,11 @@ struct Reporter {
     /// be read.
     shown: Option<String>,
     shown_at: Instant,
-    /// The patch file's name, as Nexon's server or the user's folder has it. The first two
-    /// steps work on that file.
+    /// The patch file's name, as its address has it. The first two steps work on that file.
     patch: String,
     last_emit: Instant,
-    /// Where the patch file is downloaded to first. A run from a file on this PC has no such
-    /// step, so its progress starts at the checks.
-    download_to: Option<PathBuf>,
+    /// Where the patch file is downloaded to.
+    download_to: PathBuf,
     /// The download at work found the patch file there whole and has fetched nothing; see
     /// [`shown_step`].
     whole: bool,
@@ -672,7 +690,7 @@ impl Reporter {
             shown_at: now,
             patch: String::new(),
             last_emit: now,
-            download_to: None,
+            download_to: PathBuf::new(),
             whole: false,
             floor: 0.0,
             tried: false,
@@ -722,7 +740,7 @@ impl Reporter {
                 self.time_step(Some(stage));
                 self.downloaded_to = None;
                 (self.stage, self.done, self.total, self.kept) = (stage, 0, 0, 0);
-                self.whole = stage == Stage::Download && self.download_to.as_deref().is_some_and(Path::is_file);
+                self.whole = stage == Stage::Download && self.download_to.is_file();
                 // The first two steps work on the patch file itself; the others name a game
                 // file each as they go.
                 let on_patch = matches!(stage, Stage::Download | Stage::VerifyPatch) && !self.patch.is_empty();
@@ -848,7 +866,7 @@ impl Reporter {
         // The figures of a download that is not shown as one are not those of the step that
         // is shown in its place, which has yet to begin.
         let part = if step != self.stage || self.total == 0 { 0.0 } else { self.done as f64 / self.total as f64 };
-        bar(stretch(step, self.tried, self.download_to.is_some()), part, self.floor)
+        bar(stretch(step, self.tried), part, self.floor)
     }
 
     fn snapshot(&self) -> Progress {
@@ -899,6 +917,7 @@ impl Reporter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::made::Registered;
 
     fn begins(name: &str) -> Event {
         Event::File(name.to_owned())
@@ -1013,7 +1032,7 @@ mod tests {
         assert_eq!(shown, Stage::VerifyPatch);
         assert_eq!(status_of(shown), "패치 파일 검사 중");
         // The bar is where the check of the file begins.
-        assert_eq!(bar(stretch(shown, false, true), 0.0, 0.0), 30.0);
+        assert_eq!(bar(stretch(shown, false), 0.0, 0.0), 30.0);
     }
 
     #[test]
@@ -1028,17 +1047,15 @@ mod tests {
     #[test]
     fn the_steps_of_a_run_lie_end_to_end_along_the_bar() {
         use Stage::{Apply, Download, Rebuild, Trial, VerifyInstall, VerifyPatch};
-        // With a download and without one, each with a trial and without one.
-        let runs: [(&[Stage], bool, bool); 4] = [
-            (&[Download, VerifyPatch, VerifyInstall, Rebuild, Apply], false, true),
-            (&[Download, VerifyPatch, VerifyInstall, Trial, Rebuild, Apply], true, true),
-            (&[VerifyPatch, VerifyInstall, Rebuild, Apply], false, false),
-            (&[VerifyPatch, VerifyInstall, Trial, Rebuild, Apply], true, false),
+        // Without a trial, and with one.
+        let runs: [(&[Stage], bool); 2] = [
+            (&[Download, VerifyPatch, VerifyInstall, Rebuild, Apply], false),
+            (&[Download, VerifyPatch, VerifyInstall, Trial, Rebuild, Apply], true),
         ];
-        for (steps, tried, downloads) in runs {
+        for (steps, tried) in runs {
             let mut end = 0.0;
             for step in steps {
-                let (start, span) = stretch(*step, tried, downloads);
+                let (start, span) = stretch(*step, tried);
                 assert!((start - end).abs() < 1e-9, "{step:?} begins at {start}, the step before ends at {end}");
                 end = start + span;
             }
@@ -1049,16 +1066,16 @@ mod tests {
     #[test]
     fn the_bar_waits_where_an_unfinished_run_had_come_to() {
         let floor = 69.25;
-        let rebuild = stretch(Stage::Rebuild, false, true);
+        let rebuild = stretch(Stage::Rebuild, false);
         // The steps before that point are gone through again without the bar going back.
-        assert_eq!(bar(stretch(Stage::VerifyPatch, false, true), 0.0, floor), floor);
-        assert_eq!(bar(stretch(Stage::VerifyInstall, false, true), 1.0, floor), floor);
+        assert_eq!(bar(stretch(Stage::VerifyPatch, false), 0.0, floor), floor);
+        assert_eq!(bar(stretch(Stage::VerifyInstall, false), 1.0, floor), floor);
         assert_eq!(bar(rebuild, 0.3, floor), floor);
         // Past it the figure is the run's own, as it is in a run that takes nothing up.
         assert_eq!(bar(rebuild, 0.5, floor), 70.0);
         assert_eq!(bar(rebuild, 0.5, 0.0), 70.0);
         // A step never goes past its own end.
-        assert_eq!(bar(stretch(Stage::Download, false, true), 1.5, 0.0), 30.0);
+        assert_eq!(bar(stretch(Stage::Download, false), 1.5, 0.0), 30.0);
     }
 
     #[test]
@@ -1072,7 +1089,7 @@ mod tests {
     }
 
     fn live() -> Site {
-        Site::new(&mfp_kms::LIVE, PathBuf::from("data"), crate::harness::StandIns::default())
+        Site::of(&mfp_kms::LIVE, PathBuf::from("data"), crate::harness::StandIns::default(), Registered::nowhere())
     }
 
     /// Whether an address is one a patch is fetched from is decided here, where the run is
@@ -1111,7 +1128,12 @@ mod tests {
         // A build for trying the app out takes the made-up server it is pointed at. A build
         // that is given out is pointed at none, and takes no such address.
         let made_up = "http://127.0.0.1:18421/Patch/00901/00900to00901.patch";
-        let trying_out = Site::new(&mfp_kms::LIVE, PathBuf::from("data"), crate::harness::StandIns::of_a_session());
+        let trying_out = Site::of(
+            &mfp_kms::LIVE,
+            PathBuf::from("data"),
+            crate::harness::StandIns::of_a_session(),
+            Registered::nowhere(),
+        );
         assert!(taken(&trying_out, made_up).unwrap().own);
         assert_eq!(refused(made_up), ["넥슨 패치 서버 주소가 아닙니다."]);
     }

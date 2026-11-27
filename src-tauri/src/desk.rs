@@ -14,6 +14,7 @@ use mfp_kms::notice;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::diagnosis::{DiagnosisView, diagnose_if_due, shown_of};
 use crate::flow::{Decision, Flow, Phase, Progress, RefusalKind, Run, World, calm, decide};
 use crate::game::start_game;
 use crate::maintenance::{Lamp, own_delay};
@@ -50,7 +51,7 @@ pub(crate) struct SiteView {
     custom_dir: bool,
     half_patched: bool,
     /// Removing what a run left cannot be made good by this app: the folder is partly new,
-    /// or the record of an apply that was cut off cannot be read. The user is asked first.
+    /// or an apply that was cut off in it cannot be undone. The user is asked first.
     discard_asks: bool,
     phase: Phase,
     run: Option<Run>,
@@ -63,6 +64,9 @@ pub(crate) struct SiteView {
     /// The client whose run keeps this one from starting: a run is at work, and it is that
     /// client's.
     locked: Option<&'static str>,
+    /// The diagnosis of the PC, for the page of its own. Nothing for a client without a
+    /// folder: there is no tab for it there.
+    diagnosis: Option<DiagnosisView>,
 }
 
 impl SiteView {
@@ -75,7 +79,7 @@ impl SiteView {
         if self.phase.at_work() {
             steady.percent = None;
             if let Some(run) = &mut steady.run {
-                (run.percent, run.done, run.total, run.worked) = (0.0, 0, 0, 0);
+                (run.done, run.total, run.worked) = (0, 0, 0);
                 run.activity.clear();
             }
         }
@@ -120,6 +124,10 @@ fn app_word(patcher: &Patcher) -> AppWord {
 pub(crate) struct Outside {
     pub(crate) world: World,
     lamp: Option<Lamp>,
+    /// What the page is told of the site's diagnosis, and the line its own page shows of
+    /// one that found no ordinary PC; see [`crate::diagnosis`].
+    diagnosis: Option<DiagnosisView>,
+    seat: Option<Row>,
     /// The client whose run keeps this one from starting.
     locked: Option<&'static str>,
 }
@@ -132,16 +140,23 @@ pub(crate) fn outside(patcher: &Patcher, site: &Site) -> Outside {
     // Whether the app's home was asked is read before what it said: once it was asked, its
     // word is in place (see `watch_updates`), and is not read as it was a moment before.
     let update_asked = patcher.update_asked.load(Ordering::SeqCst);
+    let (diagnosis, seat) = shown_of(patcher, site);
+    let checking_files = diagnosis.as_ref().is_some_and(DiagnosisView::checking);
     let world = World {
         auto_patch: settings.auto_patch,
         auto_start: settings.auto_start,
         outdated: patcher.update.lock().unwrap().as_ref().is_some_and(|update| update.required),
-        run_at_work: patcher.running().is_some(),
+        // A check of the game's files holds the folder as a run does: nothing is begun
+        // in it by itself meanwhile.
+        run_at_work: patcher.turn_taken() || checking_files,
         open: told.open,
+        sees_open: site.inspection().is_some(),
+        checking_files,
         update_asked,
         now: Instant::now(),
     };
-    Outside { world, lamp: told.lamp, locked: patcher.holding(site).map(|other| other.client.server.key()) }
+    let locked = patcher.holding(site).map(|other| other.client.server.key());
+    Outside { world, lamp: told.lamp, locked, diagnosis, seat }
 }
 
 /// Whether there is nothing to hurry for with the checks of `site` now; see [`calm`].
@@ -162,7 +177,9 @@ fn site_view(site: &Site, flow: &Flow, outside: &Outside) -> SiteView {
         patch_address: shown.address,
         checked_at: flow.checked_at,
         lamp: outside.lamp.clone(),
-        rows: shown.rows,
+        // What the diagnosis says of a PC that is no ordinary one stands last: it is
+        // for knowing, and nothing in the way.
+        rows: shown.rows.into_iter().chain(outside.seat.clone()).collect(),
         custom_dir: flow.status.as_ref().is_some_and(|status| status.custom_dir),
         half_patched: flow.status.as_ref().is_some_and(|status| status.half_patched),
         discard_asks: flow.status.as_ref().is_some_and(Status::discard_asks),
@@ -175,6 +192,7 @@ fn site_view(site: &Site, flow: &Flow, outside: &Outside) -> SiteView {
         summary: shown.summary,
         button: shown.button,
         locked: outside.locked,
+        diagnosis: outside.diagnosis.clone(),
     }
 }
 
@@ -296,13 +314,15 @@ pub(crate) fn open_desks(app: &AppHandle) {
     }
 }
 
-/// One round of the desk of the site at `place`: a look at the install folder and a check
-/// of the server, each if it is due; then what the app does by itself; then what the screen
-/// says, which also changes with the time alone.
+/// One round of the desk of the site at `place`: a look at the install folder, a folder to
+/// put back, a patch file to read and a check of the server, each if it is due; then what
+/// the app does by itself; then what the screen says, which also changes with the time
+/// alone.
 ///
 /// Nothing is held while a look or a check is made. A look holds only what keeps two looks
 /// apart, and a check works on a thread of its own, so that the looks go on while the
-/// server is slow.
+/// server is slow. So do putting a folder back and reading a patch file, which take as long
+/// as the files are large.
 fn round(app: &AppHandle, patcher: &Patcher, place: usize) {
     let site = &patcher.sites[place];
     // Asked before anything is held: the window answers from the thread it lives on.
@@ -321,6 +341,7 @@ fn round(app: &AppHandle, patcher: &Patcher, place: usize) {
     }
     heal_if_due(app, patcher, place);
     read_patch_if_due(app, patcher, place);
+    diagnose_if_due(app, patcher, place);
     let begins = {
         let mut flow = site.flow.lock().unwrap();
         let due = flow.check_is_due(Instant::now(), patcher.running().is_some());
@@ -359,6 +380,13 @@ fn heal_if_due(app: &AppHandle, patcher: &Patcher, place: usize) {
     if !heal_begins(site, &install, patcher.running_for(site), Instant::now()) {
         return;
     }
+    // An app that is about to leave and start itself again begins nothing that leaving
+    // would cut off; see `rights`. Looked at once the turn is taken, as that side looks for
+    // a turn once it has said so: one of the two sees the other.
+    if patcher.restarting.load(Ordering::SeqCst) || site.diagnosis.lock().unwrap().checking() {
+        site.heal.lock().unwrap().at_work = false;
+        return;
+    }
     let app = app.clone();
     std::thread::spawn(move || {
         let patcher = app.state::<Patcher>();
@@ -395,6 +423,25 @@ fn read_patch_if_due(app: &AppHandle, patcher: &Patcher, place: usize) {
     });
 }
 
+/// Takes the start of the game that is due for `site`, and says whether it was there to
+/// take: not while the app is about to leave and start itself again, when the game stays
+/// due for the copy that takes over. Taken, it is no longer due.
+///
+/// The app says that it is leaving before it reads what is due to hand that over (see
+/// [`crate::rights::start_again_with_rights`]), and reads it under the same lock as this
+/// is taken under. So the game is started by this copy or by the next, and never by both.
+///
+/// Nor does the app start the game by itself into a check of its files that the user
+/// asked for (see [`crate::diagnosis`]): the game stays due until the check has ended.
+fn claims_game_start(patcher: &Patcher, site: &Site) -> bool {
+    let mut flow = site.flow.lock().unwrap();
+    if patcher.restarting.load(Ordering::SeqCst) || site.diagnosis.lock().unwrap().checking() {
+        return false;
+    }
+    flow.game_due = false;
+    true
+}
+
 /// Does what the app does by itself for `site` now, if anything; see [`decide`].
 ///
 /// Nobody asked for what is done here, so nobody is told when it does not come about: it
@@ -415,7 +462,16 @@ fn act(app: &AppHandle, patcher: &Patcher, site: &Site) {
                 update(app, patcher, site, |flow| flow.game_due = false);
                 site.log("not starting the game by itself: another patch is waiting, or that could not be ruled out");
             }
+            Decision::LeaveGameToUser => {
+                update(app, patcher, site, |flow| flow.game_due = false);
+                site.log("not starting the game by itself: whether it is open cannot be seen for this client");
+            }
             Decision::StartGame => {
+                // An app that is about to leave and start itself again starts no game: it
+                // stays due, and the copy that takes over is told so; see `rights`.
+                if !claims_game_start(patcher, site) {
+                    return;
+                }
                 match start_game(app, patcher, site) {
                     Ok(()) => site.log("started the game after the patch"),
                     Err(err) => {
@@ -451,7 +507,9 @@ mod tests {
     use super::*;
     use crate::flow::{Refusal, RunEnd, pick};
     use crate::harness::StandIns;
-    use crate::made::{errored, game_at, game_open, no_game_at, no_install, patch_to, resumable, up_to_date};
+    use crate::made::{
+        Registered, errored, game_at, game_open, no_game_at, no_install, patch_to, resumable, up_to_date,
+    };
     use crate::offer::{CheckEnd, Checked};
     use crate::state::{Availability, Step};
 
@@ -462,6 +520,8 @@ mod tests {
             outdated: false,
             run_at_work: false,
             open: Some(true),
+            sees_open: true,
+            checking_files: false,
             update_asked: true,
             now,
         }
@@ -469,12 +529,12 @@ mod tests {
 
     /// What is outside a site at `now` with nothing going on around it.
     fn seen(now: Instant) -> Outside {
-        Outside { world: world(now), lamp: None, locked: None }
+        Outside { world: world(now), lamp: None, locked: None, diagnosis: None, seat: None }
     }
 
     /// The live game's site with its folder looked at and the patch to 1.2.422 on the server.
     fn site_with_a_patch(now: Instant) -> Site {
-        let site = Site::new(&mfp_kms::LIVE, PathBuf::from("data"), StandIns::default());
+        let site = Site::of(&mfp_kms::LIVE, PathBuf::from("data"), StandIns::default(), Registered::nowhere());
         {
             let mut flow = site.flow.lock().unwrap();
             flow.take_look(game_at(r"C:\Games\Maple"), now);
@@ -529,6 +589,7 @@ mod tests {
             "summary",
             "button",
             "locked",
+            "diagnosis",
         ];
         assert_eq!(names(&view), BTreeSet::from(all));
         assert_eq!(view["server"], json!("live"));
@@ -562,12 +623,11 @@ mod tests {
             "message": "새 게임 파일 검사에 실패했습니다.",
             "details": ["Map001.wz"],
         });
+        // Of the run it is told what it draws by, and nothing the backend keeps for itself:
+        // not the address or the version of its patch, nor that the app goes once it stops.
+        // How far it has come is the figure of the screen.
         let run = json!({
-            "source": null,
-            "label": "1.2.422",
-            "leaving": false,
             "asking": false,
-            "percent": 40.0,
             "step": "verifyInstall",
             "done": 1,
             "total": 8,
@@ -576,6 +636,7 @@ mod tests {
             "failure": failure,
         });
         assert_eq!((&view["phase"], &view["run"]), (&json!("failed"), &run));
+        assert_eq!(view["percent"], json!(40.0));
         assert_eq!(view["button"], json!({ "kind": "retry", "enabled": true, "primary": true }));
     }
 
@@ -613,11 +674,11 @@ mod tests {
     fn a_run_says_where_it_is_and_the_app_what_is_not_of_one_client_under_the_pages_names() {
         let progress = said(12.5, Step::Download, "패치 파일 다운로드 중", 1, "다운로드 중: 00421to00422.patch");
         let word = serde_json::to_value(ProgressWord { server: "live", progress }).unwrap();
+        // What the step is called is the footer's word, which comes with the screen.
         let expected = json!({
             "server": "live",
             "percent": 12.5,
             "step": "download",
-            "status": "패치 파일 다운로드 중",
             "done": 1,
             "total": 8,
             "worked": 1,
@@ -640,7 +701,6 @@ mod tests {
         let kinds = [
             (RefusalKind::Blocked, "blocked"),
             (RefusalKind::Busy, "busy"),
-            (RefusalKind::Outdated, "outdated"),
             (RefusalKind::Nothing, "nothing"),
             (RefusalKind::Address, "address"),
             (RefusalKind::Ask, "ask"),
@@ -655,13 +715,34 @@ mod tests {
         }
     }
 
+    /// While Windows asks whether the app may start again with administrator rights, the
+    /// game that is due is not started: it stays due, for the copy that takes over, or for
+    /// this one if the user says no.
+    #[test]
+    fn a_game_that_is_due_is_not_started_by_an_app_that_is_about_to_leave() {
+        let site = Site::of(&mfp_kms::LIVE, PathBuf::from("data"), StandIns::default(), Registered::nowhere());
+        let patcher = Patcher::of(PathBuf::from("data"), vec![site]);
+        let site = &patcher.sites[0];
+        let due = || site.flow.lock().unwrap().game_due;
+        site.flow.lock().unwrap().game_due = true;
+
+        patcher.restarting.store(true, Ordering::SeqCst);
+        assert!(!claims_game_start(&patcher, site) && due());
+        // What the copy that takes over is told is what was left due.
+        assert!(site.flow.lock().unwrap().remembered().game_due);
+
+        patcher.restarting.store(false, Ordering::SeqCst);
+        assert!(claims_game_start(&patcher, site) && !due());
+    }
+
     #[test]
     fn a_site_is_told_whose_run_keeps_it_from_starting() {
-        let stand_in = |client| Site::new(client, PathBuf::from("data"), StandIns::default());
+        let stand_in = |client| Site::of(client, PathBuf::from("data"), StandIns::default(), Registered::nowhere());
         let patcher = Patcher::of(PathBuf::from("data"), vec![stand_in(&mfp_kms::LIVE), stand_in(&mfp_kms::TEST)]);
         let (live, test) = (&patcher.sites[0], &patcher.sites[1]);
         let locked = |site: &Site| {
-            let view = site_view(site, &site.flow.lock().unwrap(), &outside(&patcher, site));
+            let outside = outside(&patcher, site);
+            let view = site_view(site, &site.flow.lock().unwrap(), &outside);
             serde_json::to_value(view).unwrap()["locked"].clone()
         };
         assert_eq!((locked(live), locked(test)), (Value::Null, Value::Null));
@@ -751,7 +832,7 @@ mod tests {
     #[test]
     fn the_footer_never_calls_the_install_up_to_date_over_a_page_with_no_newest_version() {
         let now = Instant::now();
-        let site = Site::new(&mfp_kms::LIVE, PathBuf::from("data"), StandIns::default());
+        let site = Site::of(&mfp_kms::LIVE, PathBuf::from("data"), StandIns::default(), Registered::nowhere());
         let events = events();
         for length in 1..=4u32 {
             for order in 0..LOOKS * events.len().pow(length - 1) {
